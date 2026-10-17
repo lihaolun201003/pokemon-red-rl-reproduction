@@ -38,6 +38,11 @@ class TrajectorySampler():
         self.workers = [Worker(configs["environment"], rank, worker_id + 200 + rank) for rank in range(self.n_workers)]
         # Setup timestep placeholder
         self.worker_current_episode_step = torch.zeros((self.n_workers, ), dtype=torch.long)
+        # Supervision logging only: the workers already return this info dictionary every
+        # step; keep the latest one so launchers can log game progress without touching
+        # the training math. Also expose the episodes completed in the latest sample().
+        self.latest_infos = [{} for _ in range(self.n_workers)]
+        self.last_episode_infos = []
         
         # Setup initial observations and ground truth information
         self.current_obs = {}
@@ -109,6 +114,8 @@ class TrajectorySampler():
             # Retrieve results
             for w, worker in enumerate(self.workers):
                 obs, self.buffer.rewards[w, t], self.buffer.dones[w, t], info = worker.child.recv()
+                # Supervision logging only: remember the last info dict of each worker.
+                self.latest_infos[w] = info
                 for key, value in obs.items():
                     self.current_obs[key][w] = value
                 if self.ground_truth is not None:
@@ -122,6 +129,7 @@ class TrajectorySampler():
                     # Increment worker timestep
                     self.worker_current_episode_step[w] +=1
 
+        self.last_episode_infos = episode_infos
         return episode_infos
 
     def previous_model_input_to_buffer(self, t):

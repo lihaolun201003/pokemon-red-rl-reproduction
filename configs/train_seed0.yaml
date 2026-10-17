@@ -1,0 +1,100 @@
+# Long-run training configuration, experiment seed_0 (RL training supervision round).
+# Derived from configs/paper_baseline.yaml without changing any PPO / model / reward value.
+# ONLY the parallel scale and checkpoint cadence differ from the paper baseline, because
+# this workstation has 16 GB RAM (the paper's 32 x 2048 batch alone needs ~4.2 GiB for
+# the screen rollout) and the round budget is 1,000,000 environment steps.
+# sampler.n_workers * sampler.worker_steps = 2000, which divides every stage target
+# (10k / 100k / 300k / 1M) so milestones land on exact PPO update boundaries.
+environment:
+  type: "PokeRedV2"
+  name: "./local/PokemonRed.gb"
+  frame_skip: 1
+  last_action_to_obs: False
+  last_reward_to_obs: False
+  obs_stacks: 1
+  grayscale: False
+  resize_vis_obs: [72, 80]
+  reset_params:
+    start-seed: 0
+    num-seeds: 1
+    init-state: "./local/has_pokedex_nballs.state"
+    max_steps: 10240
+    reward_scale: 0.5
+    event_weight: 4.0
+    level_weight: 1.0
+    heal_weight: 5.0
+    op_lvl_weight: 0.0
+    explore_weight: 0.1
+    use_explore_map_obs: True
+    use_recent_actions_obs: False
+    zero_recent_actions: False
+
+model:
+  load_model: False
+  model_path: ""
+  # Save every 5 updates = 10,000 environment steps. train.py saves atomically
+  # (tmp file + replace) and verifies the checkpoint right after writing.
+  checkpoint_interval: 5
+  activation: "relu"
+  vis_encoder: "cnn"
+  hidden_layer: "default"
+  num_hidden_layers: 1
+  num_hidden_units: 512
+  modalities:
+    screens:
+      type: "atari_cnn"
+      dtype: "float32"
+    map:
+      type: "atari_cnn"
+      dtype: "float32"
+    events:
+      type: "fc"
+      dtype: "float32"
+      dims: [256, 64]
+      activation: "relu"
+    game_state:
+      type: "fc"
+      dtype: "float32"
+      dims: [64]
+      activation: "relu"
+
+evaluation:
+  # Independent evaluation is done by scripts/eval_checkpoint.py at stage boundaries.
+  evaluate: False
+  n_workers: 3
+  seeds:
+    start-seed: 100000
+    num-seeds: 10
+  interval: 200
+
+sampler:
+  # Chosen after the local throughput / memory benchmark (see training_supervisor.md).
+  n_workers: 8
+  worker_steps: 250
+
+trainer:
+  algorithm: "PPO"
+  resume_at: 0
+  gamma: 0.997
+  lamda: 0.95
+  updates: 50000
+  epochs: 3
+  n_mini_batches: 8
+  value_coefficient: 0.5
+  max_grad_norm: 0.5
+  advantage_normalization: "minibatch"
+  learning_rate_schedule:
+    initial: 3.0e-4
+    final: 3.0e-4
+    power: 1.0
+    max_decay_steps: 50000
+  beta_schedule:
+    initial: 0.0
+    final: 0.0
+    power: 1.0
+    max_decay_steps: 50000
+  clip_range_schedule:
+    initial: 0.2
+    final: 0.2
+    power: 1.0
+    max_decay_steps: 50000
