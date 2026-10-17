@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use this repository, please cite the original paper and the upstream neroRL implementation."
+title: "Pokemon Red RL - independent reproduction and training supervision experiment (seed_0, 1M real environment steps)"
+abstract: >-
+  Independent reproduction of the Pokemon Red reinforcement-learning pipeline
+  (PyBoy emulator + PPO, based on neroRL's poke_red branch and the paper
+  "Pokemon Red via Reinforcement Learning"), plus a supervised long-training
+  experiment reaching 1,000,000 real environment steps and a fixed-protocol
+  independent evaluation. No game ROM, save state, model weights or gameplay
+  video is distributed with this repository.
+authors:
+  - name: "lihaolun201003"
+    alias: "lihaolun201003"
+    affiliation: "Independent"
+repository-code: "https://github.com/lihaolun201003/pokemon-red-rl-reproduction"
+license: MIT
+references:
+  - type: article
+    title: "Pokemon Red via Reinforcement Learning"
+    authors:
+      - family-names: "Pleines"
+        given-names: "Marco"
+    url: "https://arxiv.org/abs/2502.19920"
+  - type: software
+    title: "neroRL (poke_red branch)"
+    authors:
+      - family-names: "Pleines"
+        given-names: "Marco"
+    url: "https://github.com/MarcoMeter/neroRL/tree/poke_red"
+    version: "1d5c2db1f47f29d501ec9eacdc9c7f6480ea6217"
+  - type: software
+    title: "PokemonRedExperiments"
+    authors:
+      - family-names: "Whidden"
+        given-names: "Peter"
+    url: "https://github.com/PWhiddy/PokemonRedExperiments"
