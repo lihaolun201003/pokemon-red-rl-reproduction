@@ -203,3 +203,29 @@ def test_paper_config_is_separate():
     assert paper["trainer"]["beta_schedule"]["initial"] == 0
     assert smoke["sampler"] == {"n_workers": 2, "worker_steps": 16}
     assert smoke["reproduction"]["smoke"]
+
+
+def test_launcher_outputs_and_resume_on_synthetic_fixture(fixture_config, monkeypatch, tmp_path):
+    """Exercise the actual CLI main and its artifacts, explicitly bypassing real-ROM input checks."""
+    import shutil
+    import neroRL.sampler.trajectory_sampler as sampler
+    from scripts import train
+    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+    monkeypatch.setattr(sampler, "Worker", LocalWorker)
+    monkeypatch.setattr(train, "load_config", lambda _: copy.deepcopy(fixture_config))
+    monkeypatch.setattr(train, "validate_inputs", lambda *a: {"synthetic": True})
+    first, resumed = tmp_path / "first", tmp_path / "resumed"
+    monkeypatch.setattr(sys, "argv", ["train.py", "--total-steps", "32", "--device", "cpu", "--out", str(first)])
+    train.main()
+    checkpoint = first / "checkpoint_000000032.pt"
+    assert checkpoint.is_file()
+    monkeypatch.setattr(sys, "argv", ["train.py", "--total-steps", "64", "--device", "cpu", "--out", str(resumed), "--resume", str(checkpoint)])
+    train.main()
+    data = read_checkpoint(resumed / "checkpoint_000000064.pt")
+    assert data["next_update"] == 2 and data["environment_steps"] == 64
+    assert data["provenance"]["synthetic"]
+    accumulator = EventAccumulator(str(resumed / "tensorboard")).Reload()
+    assert accumulator.Scalars("progress/environment_steps")[0].value == 64
+    for name in ("config.yaml", "environment.json", "metrics.jsonl", "result.json"):
+        assert (resumed / name).is_file()
+    shutil.copytree(resumed / "tensorboard", ROOT / "artifacts/synthetic-cpu/tensorboard", dirs_exist_ok=True)
