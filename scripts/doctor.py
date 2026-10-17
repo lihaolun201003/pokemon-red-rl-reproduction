@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import importlib
 import importlib.metadata
 import io
@@ -63,7 +64,12 @@ def main():
         assert torch.isfinite(x.grad).all()
         report[f"{device}_matmul_backward"] = "passed"
     report["pyboy_probe"] = emulator_probe()
-    report["rom_present"] = (ROOT / "local/PokemonRed.gb").is_file()
+    from reproduction.runtime import ROM_SHA1
+    candidates = sorted({*ROOT.glob("local/*.gb"), *ROOT.glob("local/*.gbc")})
+    report["rom_candidates"] = [{"filename": p.name, "bytes": p.stat().st_size,
+        "sha1": hashlib.sha1(p.read_bytes()).hexdigest()} for p in candidates]
+    report["rom_present"] = bool(candidates)
+    report["canonical_rom_present"] = any(p["sha1"] == ROM_SHA1 for p in report["rom_candidates"])
     report["state_present"] = (ROOT / "local/has_pokedex_nballs.state").is_file()
     target = Path(args.output)
     target.parent.mkdir(parents=True, exist_ok=True)

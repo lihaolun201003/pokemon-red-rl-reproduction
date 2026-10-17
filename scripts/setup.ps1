@@ -11,7 +11,7 @@ $pythonExe=Join-Path (Get-Location) '.venv/Scripts/python.exe'
 Check-Exit
 $wheelIndex=if($Device -eq 'cuda'){'https://download.pytorch.org/whl/cu121'}else{'https://download.pytorch.org/whl/cpu'}
 $torchBuild=if($Device -eq 'cuda'){'torch==2.5.1+cu121'}else{'torch==2.5.1+cpu'}
-& $pythonExe -m pip install $torchBuild --index-url $wheelIndex
+& $pythonExe -m pip install $torchBuild --index-url $wheelIndex --timeout 30 --retries 2
 Check-Exit
 & $pythonExe -m pip install -r requirements-phase1.txt
 Check-Exit
