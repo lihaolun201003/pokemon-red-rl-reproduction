@@ -32,7 +32,7 @@ Usage (PowerShell, from the repository root):
     # or pass one parent directory and let discovery find every child result
     # (--exclude keeps CUDA smoke / self-test output out of the comparison tables):
     .venv\\Scripts\\python.exe scripts/summarize_eval.py artifacts/training/seed_0/eval `
-        --exclude _cuda_smoke --exclude _selftest --overwrite
+        --exclude _cuda_smoke --exclude _selftest --exclude _demos --overwrite
 """
 
 import argparse
@@ -97,6 +97,15 @@ REPORT_NOTES = [
     "官方环境只记录前两个徽章（badges = badge_1 + badge_2）；mt_moon / cerulean 是 0/1 标记的"
     "组内均值（到达过该地点的 episode 比例）。",
     "所有数值直接来自各 results.json，按原样聚合，未做筛选、平滑或人工修饰。",
+]
+
+VIDEO_NOTES = [
+    "deterministic 视频说明：eval_*/baseline_untrained 目录里的 mp4 录制的是 argmax deterministic "
+    "episode；该策略在本 run 中退化为重复单一按键（见 deterministic 表，coords=1），因此这些视频"
+    "只作轨迹证据，不代表模型的真实探索能力。",
+    "随机策略演示视频为另外补录（第一个 stochastic episode、2048 步、不属于 v1/v1-ext 协议内评估）："
+    "artifacts/training/seed_0/eval/videos/demo_1m_stochastic.mp4 与 demo_300k_stochastic.mp4；"
+    "它们用于人工复查最佳模型的探索行为，不参与聚合表、不改变协议定义。",
 ]
 
 
@@ -655,7 +664,15 @@ def _build_markdown(rows, protocol_warnings, generated_utc):
 
     lines.extend([
         "",
-        "## 6. 说明与限制",
+        "## 6. 视频说明",
+        "",
+    ])
+    for note in VIDEO_NOTES:
+        lines.append(f"- {note}")
+
+    lines.extend([
+        "",
+        "## 7. 说明与限制",
         "",
     ])
     for note in REPORT_NOTES:
@@ -669,7 +686,7 @@ def _build_markdown(rows, protocol_warnings, generated_utc):
     for row in rows:
         for warning in row.get("warnings", []):
             all_warnings.append(f"{row['label']}: {warning}")
-    lines.extend(["", "## 7. 异常与警告", ""])
+    lines.extend(["", "## 8. 异常与警告", ""])
     if all_warnings:
         for warning in all_warnings:
             lines.append(f"- {warning}")
@@ -755,6 +772,7 @@ def main(argv=None):
         "action_entropy_note": f"Shannon entropy in bits over aggregated action counts; "
                                f"uniform maximum is log2(7)={UNIFORM_ACTION_ENTROPY:.4f}",
         "report_notes": REPORT_NOTES,
+        "video_notes": VIDEO_NOTES,
         "warnings": protocol_warnings,
         "rows": rows,
     }

@@ -60,7 +60,8 @@
 | `--steps N` | 2048 | 每 episode 最多步数 |
 | `--seed N` | 100000 | 基准种子；episode i 用 `seed+i` |
 | `--device auto|cpu|cuda` | auto | 模型推理设备（环境始终 CPU） |
-| `--video PATH` | 无 | 录制最后一个 episode 为 mp4（默认即 deterministic episode）并保存截图 |
+| `--video PATH` | 无 | 录制由 `--video-mode` 选定的 episode 为 mp4 并保存截图 |
+| `--video-mode deterministic\|stochastic` | deterministic | `--video` 录制哪个 episode：`deterministic`=argmax episode（默认，协议最后一条）；`stochastic`=第一条随机策略 episode（用于人工复查探索行为的演示视频） |
 | `--rom/--state` | 配置值 | 覆盖 ROM / 初始存档路径 |
 | `--no-stochastic` | 关 | 只跑 argmax 确定性 episode |
 | `--overwrite` | 关 | 允许覆盖已存在的 `results.json` / 视频（默认拒绝，防误覆盖历史评估） |
@@ -108,8 +109,10 @@
 
 ### 2.5 视频与截图
 
-- `--video PATH` 时录制**最后一个 episode**（默认协议下即 deterministic episode；`--random-actions` 时是最后一个随机 episode）：
-  - 160×144 mp4，`cv2.VideoWriter` + `mp4v`，fps = 2.5（1 帧/决策），每步写入一帧，颜色由 PyBoy RGB 转 BGR；
+- `--video PATH` 时录制 `--video-mode` 选定的 episode：
+  - 默认 `--video-mode deterministic`：录制**最后一个 episode**（默认协议下即 deterministic episode；`--random-actions` 时是最后一个随机 episode）；
+  - `--video-mode stochastic`：录制**第一个 stochastic episode**（seed = base seed）。由于 argmax 策略在部分 checkpoint 会退化为重复单一按键，deterministic 视频不适合人工复查探索行为；该模式仅用于演示/复查，不改变评估表与统计口径；
+  - 160×144 mp4，`cv2.VideoWriter` + `mp4v`，fps = 2.5（1 帧/决策），每步写入一帧，颜色由 PyBoy RGB 转 BGR；2048 步的视频为 2048 帧（播放时长 819.2 s），但 Eval 实际耗时仅约 15 s；
   - 录制后从视频中抽取 **25% / 50% / 100%** 三帧保存 PNG（帧号按实际 episode 长度四舍五入；100% 为最后一帧）。小 episode 下比例会有舍入（如 16 步时 25% 落在第 4 帧=0.267），`results.json` 同时记录 `requested_fraction` 与 `actual_fraction`。
 
 ---
@@ -142,8 +145,9 @@
 ### 3.2 其他输出
 
 - `out/config_snapshot.yaml`：本次实际使用的完整配置快照（checkpoint 模式为 checkpoint 内配置；含环境、模型、trainer、sampler）。
-- `out/<prefix>_25pct.png`、`_50pct.png`、`_100pct.png`：`--video` 时的截图（`prefix` 为 `deterministic` 或 `random_actions`）。
+- `out/<prefix>_25pct.png`、`_50pct.png`、`_100pct.png`：`--video` 时的截图（`prefix` 为录制的 episode 模式：`deterministic` / `stochastic` / `random_actions`）。
 - 视频文件位于 `--video` 指定路径（建议放在 `out` 内，`results.json` 记录相对路径）。
+- 演示视频补录：`artifacts/training/seed_0/eval/videos/demo_1m_stochastic.mp4` 与 `demo_300k_stochastic.mp4`（`--video-mode stochastic --steps 2048 --episodes 1`，2048 帧/160×144/2.5fps，不属于 v1/v1-ext 协议表，仅用于人工复查最佳模型的探索行为）。
 
 ---
 
@@ -294,8 +298,10 @@
 
 ```powershell
 .venv\Scripts\python.exe scripts\summarize_eval.py artifacts\training\seed_0\eval `
-    --exclude _cuda_smoke --exclude _selftest --overwrite
+    --exclude _cuda_smoke --exclude _selftest --exclude _demos --overwrite
 ```
+
+说明：`_cuda_smoke/`（64 步 GPU 冒烟）、`_selftest/`（工具自测）与 `_demos/`（随机策略演示视频的评估输出，2048 步、非协议表）都用 `--exclude` 排除，不进入正式对比表。
 
 报告强制包含以下口径说明（不因数据好看与否而改动）：
 

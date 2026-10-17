@@ -52,8 +52,10 @@
 | 类别 | 步数 | 说明 |
 |---|---:|---|
 | **训练环境步（预算内）** | **1,000,000** | 500 updates × 2,000；A 10k + B 90k + C 200k + D 700k |
-| 评估环境步（独立于训练预算） | 307,328 | protocol v1：16,384×6 + 12,288；v1-ext：49,152×4；CUDA 冒烟 128 |
-| 合计真实模拟器交互 | 1,307,328 | 其中 1,000,000 为训练预算，307,328 为只读推理评估（不更新权重、不写训练计数器） |
+| 协议评估环境步（独立于训练预算） | 307,328 | protocol v1：16,384×6 + 12,288；v1-ext：49,152×4；CUDA 冒烟 128 |
+| 随机策略演示视频环境步 | 8,192 | demo_1m / demo_300k 各 1 个 stochastic + 1 个 deterministic episode × 2,048 步 |
+| 评估/演示合计 | 315,520 | 只读推理，不更新权重、不写训练计数器 |
+| 合计真实模拟器交互 | 1,315,520 | 其中 1,000,000 为训练预算，315,520 为评估/演示（另有少量开发期冒烟未计入） |
 
 训练步数精确等于预算，**未超出**（batch=2000 与各阶段目标整除）。
 
@@ -156,6 +158,7 @@
 - **Checkpoint 排名不稳定**：v1（n=3）300k 最高；v1-ext（n=5、更长视界）1M 最高、300k 次之、500k 明显回落；500k 的退化在两种协议中一致（可能是训练中段策略分布/探索模式变化，只记录，不改算法）。**n=3–5 的方差很大，不能据此宣称统计显著差异。**
 - **确定性 argmax 退化（重要发现）**：所有 checkpoint 的 deterministic episode 都退化为单一按键粘滞（coords=1，4096 步内几乎不移动；如 10k 全 DOWN、100k 全 A、300k 全 RIGHT、500k 全 DOWN、1M 主要为 A+B），reward 0.005–0.045。说明策略在初始状态下的 argmax 会塌缩到单一动作、无法自我脱困；**确定性指标不适合用于这批 checkpoint 的模型选择**，真实探索只在随机采样下出现。这不是评估脚本 bug（已用 CPU/CUDA 双冒烟、逐参数校验、每 episode 全新环境验证）。
 - **最佳模型（主推）**：`checkpoint_001000000.pt`（v1-ext 综合最佳；训练最充分，可继续扩展）。**次优/中期最佳**：`checkpoint_000300000.pt`（v1 协议最高分，v1-ext 次高）。两者差异在小样本噪声内。
+- 随机策略演示视频（不是 deterministic 退化轨迹）：`artifacts/training/seed_0/eval/videos/demo_1m_stochastic.mp4`（2,048 步）与 `demo_300k_stochastic.mp4`；文件已验证帧数/分辨率/可解码。
 - 逐 episode/逐 step trace、checkpoint SHA256、视频路径见 `docs/reports/eval_results.md` 与各 `results.json`。
 
 ## 10. 最佳模型路径与观看命令
@@ -178,7 +181,8 @@ cd C:\Users\lihao\Desktop\pokemon-red-rl-reproduction
 .\.venv\Scripts\python.exe scripts\watch.py --checkpoint artifacts\training\seed_0\stage_c_300k\checkpoint_000300000.pt --device cuda --speed 1 --steps 300
 ```
 
-- 评估视频（deterministic 轨迹，注意其退化特性）：`artifacts/training/seed_0/eval/videos/eval_{10k,100k,300k,500k,1m}.mp4`；随机策略演示视频：`artifacts/training/seed_0/eval/videos/demo_1m_stochastic.mp4`（如已生成，见 eval_results.md 更新）。
+- 评估视频（deterministic 轨迹，注意其退化特性）：`artifacts/training/seed_0/eval/videos/eval_{10k,100k,300k,500k,1m}.mp4`。
+- **随机策略演示视频（人工复查看这个）**：`artifacts/training/seed_0/eval/videos/demo_1m_stochastic.mp4`（1M 模型，2,048 步，160×144，2.5 fps，5.66 MB，已验证可解码；该 demo episode reward=6.51、coords=102、maps=3）与 `demo_300k_stochastic.mp4`（300k 模型，2,048 步，5.27 MB；demo episode reward=6.975、coords=195、maps=4、max_map_progress=2）。这两个视频是随机策略推理轨迹，能反映真实探索行为；deterministic 视频只是 argmax 退化轨迹（coords=1）。
 - ROM/初始状态/模型/视频均为本地文件、已被 gitignore，**不得上传 GitHub**。
 
 ## 11. 异常与处理记录

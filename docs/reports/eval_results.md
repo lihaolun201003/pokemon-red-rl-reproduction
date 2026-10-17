@@ -1,6 +1,6 @@
 # 评估结果汇总（eval-protocol-v1，含 extended check v1-ext）
 
-- 生成时间（UTC）：2026-10-17T17:20:54.726277+00:00
+- 生成时间（UTC）：2026-10-17T17:23:17.290967+00:00
 - 输入 runs：11 个 results.json（modes: checkpoint, random_actions, untrained；variants: v1, v1-ext）
 - 设备：cuda；base seed：[100000]
 - v1：steps/episode=[4096]，episodes/episode 组=[3]；v1-ext：steps/episode=[8192]，episodes/episode 组=[5]
@@ -73,7 +73,12 @@
 | ext_1m | v1-ext | artifacts/training/seed_0/eval/ext_1m/results.json | 2f2e7096e49a7b2d | 7870310d7432e520 | 1,000,000 | cuda | 8,192 | 5 | 100,000 | 49,152 | 227.7 | 2026-10-17T17:19:49.653059+00:00 |
 | ext_untrained | v1-ext | artifacts/training/seed_0/eval/ext_untrained/results.json | 4d93affa4feed635 | - | - | cuda | 8,192 | 5 | 100,000 | 49,152 | 281.0 | 2026-10-17T17:07:16.835218+00:00 |
 
-## 6. 说明与限制
+## 6. 视频说明
+
+- deterministic 视频说明：eval_*/baseline_untrained 目录里的 mp4 录制的是 argmax deterministic episode；该策略在本 run 中退化为重复单一按键（见 deterministic 表，coords=1），因此这些视频只作轨迹证据，不代表模型的真实探索能力。
+- 随机策略演示视频为另外补录（第一个 stochastic episode、2048 步、不属于 v1/v1-ext 协议内评估）：artifacts/training/seed_0/eval/videos/demo_1m_stochastic.mp4 与 demo_300k_stochastic.mp4；它们用于人工复查最佳模型的探索行为，不参与聚合表、不改变协议定义。
+
+## 7. 说明与限制
 
 - 确定性评估方差为 0：每个 run 只有 1 个 deterministic episode（策略 argmax）；初始存档固定 Game Boy RNG，且每个 episode 都新建 PyBoy 环境实例，因此同一 checkpoint 的确定性轨迹唯一。deterministic 表中的数值不是统计估计，方差按定义为 0，不参与显著性比较，也不应与其他 run 的 deterministic 值做方差检验。
 - stochastic 评估方差来自策略采样：v1 每个 run 3 个 stochastic episode（seed = base seed + 0..2），v1-ext 每个 run 5 个（seed = base seed + 0..4），base seed=100000；表中 mean±std 是该组 episode 的样本统计（n=3 或 n=5），样本很小，std 只用于观察波动，不应据此做显著性结论。
@@ -85,6 +90,6 @@
 - v1-ext 是独立扩展检查（5 stochastic + 1 deterministic × 8192 步），其评估步数单列统计、不计入训练预算，也不并入 v1 对比表；v1 与 v1-ext 的 episode 长度不同，reward/coords 的绝对值不可直接相加或比较。
 - 每个 run 的详细逐 episode / 每步指标见各自目录下的 `results.json`；本文件只做聚合。
 
-## 7. 异常与警告
+## 8. 异常与警告
 
 - 无
