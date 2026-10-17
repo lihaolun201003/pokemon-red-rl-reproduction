@@ -1,128 +1,146 @@
-# 第一阶段续验：ROM 兼容性与 RTX 4060 CUDA
+# 第一阶段最终验收：英文原版 + 真实 CUDA PPO
 
-日期：2026-10-17（Asia/Shanghai）。沿用现有仓库和 `.venv`，没有重建项目。
+实测日志日期：2026-10-17，Asia/Shanghai。随后仅整理证据与文档，没有追加训练。
 
-**结论：CUDA 安装及 CPU/GPU PPO 管线联调成功；当前中文修改版 ROM 可以启动和显示，但与官方初始状态不兼容。没有执行真实 32 步 PPO 训练，没有真实游戏 Checkpoint，没有把合成训练结果当作游戏复现。**
+**结论：基础运行目标通过。标准英文 ROM、论文官方初始状态、真实环境采样、RTX 4060 PPO 更新、Checkpoint 保存/加载/恢复、CPU/CUDA 观看及 TensorBoard 均已实际验证。训练采样总量仅 64 步（首次 32，恢复后再 32），没有开展论文成绩实验或长时间训练。**
 
-## 路径和来源
+## 1. 本地项目及固定版本
 
 - 项目：`C:\Users\lihao\Desktop\pokemon-red-rl-reproduction`
-- Python：`.venv\Scripts\python.exe`，3.10.11。
-- 官方分支：`poke_red`，固定 SHA `1d5c2db1f47f29d501ec9eacdc9c7f6480ea6217`。
-- 本轮诊断/检查脚本提交：`8bd598875224c2848c04f7a2082fb0bd9147b528`；报告与文档另有后续提交。
-- 先前 CPU/缺 ROM 阶段记录保留为 `docs/reports/phase1_validation_initial.md`，当前状态以本文件为准。
+- 解释器：`.venv\Scripts\python.exe`，Python 3.10.11。
+- neroRL：官方 `poke_red` 分支，SHA `1d5c2db1f47f29d501ec9eacdc9c7f6480ea6217`。
+- PyTorch `2.5.1+cu121`、PyBoy `2.4.0`、Gymnasium `0.29.0`。
+- GPU：NVIDIA GeForce RTX 4060 Laptop GPU，8 GB，驱动 592.82；CUDA available=True。
+- CPU：i9-13900HX，32 逻辑线程；RAM 约 16 GB。
+- 沿用已有仓库、venv 和算法，没有重装 Python、改变奖励或改写内存地址。
 
-## 1. ROM 与官方状态：不兼容
+旧的缺 ROM / 中文修改版失败记录分别保留在 `phase1_validation_initial.md`、`rom_cuda_validation_previous.md`，不能把这些历史状态当作当前结论。中文修改版没有继续适配。
 
-| 检查 | 实际结果 |
-|---|---|
-| 用户 ROM | `local/PokemonRed.gbc`，2,097,152 bytes（2 MiB） |
-| ROM SHA1 | `944ff0b461fb570d2c8aa99d819e8c8df0bdc446` |
-| ROM SHA256 | `f4092c50b04a0c471c8e1cda4af1551ac451c754be8ae03f86430c9c0dc0e073` |
-| 内部标题 / header checksum | `POKEMON RED` / 通过 |
-| ROM header | CGB flag=0，mapper=0x13，ROM size code=0x06，RAM size code=0x03 |
-| 原始启动 | PyBoy 2.4.0 显示启动动画、中文标题和菜单；SDL 原生窗口可见中文大木博士剧情 |
-| 按键 | Enter 对应 Start；实际进入游戏；固定 8 帧 press、120 帧 release 也进入中文菜单 |
-| 论文预期 ROM SHA1 | `ea9bcae617fdf159b045185467ae58b2e4a48b9a`；当前输入不匹配 |
+## 2. 从源码构建英文原版：通过
 
-`.gbc` 扩展名和英文内部标题不能证明是论文使用的英文原版。实际画面为中文修改版，ROM 大小也不同于预期版本。没有裁剪、修补或重命名 ROM 来伪装原版。
+用户已明确确认具备在本机从源码构建并使用英文 ROM 的合法使用权。
 
-按用户授权，将固定上游已检出的 `neroRL/environments/poke_red/has_pokedex_nballs.state` 原样复制至 `local/has_pokedex_nballs.state`。两份 SHA256 相同：
+官方来源：[pret/pokered](https://github.com/pret/pokered)，安装说明：[INSTALL.md](https://github.com/pret/pokered/blob/master/INSTALL.md)。固定源码 SHA：
+
+`af519899719f0754965776faac0e836a3b906e6d`
+
+工具检查结果：Git 2.55 正常；系统存在 wsl.exe，但 WSL 本身未安装，Make/RGBDS 不在 PATH。Cygwin 的项目内静默安装尝试被自动审批审查拒绝（仅返回 blocked by policy），未重试该安装器。改为无需安装、无需系统配置的便携工具链，成功完成构建。
+
+| 工具 | 版本 | 来源与 SHA256 |
+|---|---|---|
+| RGBDS | 1.0.4，与 `.rgbds-version` 一致 | [gbdev/rgbds v1.0.4](https://github.com/gbdev/rgbds/releases/tag/v1.0.4)，win64 zip：`bd1d7e386f290afd57f4ea9a7353bfcd4ae10884a94c5c1f2fc42a75db7f97e6` |
+| w64devkit | 2.10.1，GNU Make 4.4.1 / GCC 16.2.0 | [官方发布](https://github.com/skeeto/w64devkit/releases/tag/v2.10.1)，x64 archive：`add1edf984ce4d473cfeb7c52e0ab38db73a855bba6c7f564d5e16648eb2896a` |
+
+工具下载后均核对官方 release 提供的 hash；Windows tar 解压便携工具，不执行安装器、不设置全局 PATH。源码和工具只在忽略的 `work/` 下。
+
+实际构建运行 `make -j2 red`，通过 `RGBDS=` 指定本地 1.0.4 工具；构建、版本与复制检查封装为 `scripts/build_red.ps1`。
+
+| 文件 | 大小 | SHA1 |
+|---|---:|---|
+| `work/pokered/pokered.gbc` | 1,048,576 bytes | `ea9bcae617fdf159b045185467ae58b2e4a48b9a` |
+| `local/PokemonRed.gb` | 1,048,576 bytes | `ea9bcae617fdf159b045185467ae58b2e4a48b9a` |
+
+哈希与目标完全一致，仅复制改文件名，未修改 ROM 字节。没有下载任何预编译游戏 ROM。构建日志与 manifest：`artifacts/build_red.log`、`artifacts/rom_build.json`。
+
+## 3. 官方初始状态与游戏数据：通过
+
+状态：`local/has_pokedex_nballs.state`，来自固定版本 neroRL；SHA256：
 
 `0ff708b3dcdfa6c1f5fc07687b1641247017b1eb8a9a8b7c6eb0dd988431bd7e`
 
-`PyBoy.load_state` 没有抛异常，wrapper reset 后初始观测也符合数值 shape/range；但继续执行失败：
+直接 PyBoy 加载、两帧继续执行、官方 wrapper reset、32 步逐步语义检查和额外 128 步连续运行均正常。曾在中文修改版出现的 RAM 异常未再出现。
 
-| 官方 RAM 地址含义 | 刚 load | 两个模拟帧后 |
-|---|---:|---:|
-| 位置 X / Y（D362 / D361） | 5 / 3 | 0 / 57 |
-| 地图（D35E） | 40 | 0 |
-| 队伍数量（D163） | 1 | 57（非法） |
-| 首只宝可梦 species（D164） | 177（Squirtle） | 0 |
-| HP / max HP（D16C / D18D） | 22 / 22 | 57 / 14592（非法） |
-| Level（D18C） | 6 | 0（非法） |
-| 非零事件字节数（D747..D886） | 4 | 160 |
-| CPU PC | 0x20B3 | 0x0038，后续多帧仍停留此处 |
-
-官方环境第一步 DOWN 复现同样 RAM 异常，观测事件和变成 151，奖励异常跳到 `1258.005`。持续运行后画面成为灰屏。该现象在直接 PyBoy 状态加载和官方 wrapper reset/step 中均可复现。
-
-**判定：状态文件可反序列化，但这份 ROM 与该官方状态的继续执行不兼容。** 很可能与修改版代码/布局不同有关；没有原版对照，无法进一步断定具体补丁位置。未把“没有崩溃”“shape 正确”或“奖励有限”当作兼容通过。
-
-新增只读诊断 `scripts/probe_rom.py`：允许针对未知 hash 做诊断，不放宽训练入口；检查每一步 party/HP/Level 语义，失败即停止并返回 2。ROM、状态、内存地址、奖励函数均未修改。reset 的初始观测正常不代表 step 可用。
-
-初始观测：screens float32 `(3,72,80)`、map `(1,48,48)`、events `(827,)`、game_state `(12,)`；动作仍为官方 `DOWN/LEFT/RIGHT/UP/A/B/START`。后续 step 的数值虽然仍可能在 Box 范围内，游戏语义已无效，故整体观察/奖励验收失败。
-
-## 2. CUDA 安装与验证：通过
-
-硬件：i9-13900HX，约 16 GB RAM，NVIDIA GeForce RTX 4060 Laptop GPU（8 GB），驱动 592.82，`nvidia-smi` 正常。
-
-从 [PyTorch 官方 cu121 索引](https://download.pytorch.org/whl/cu121/torch/) 下载 `torch-2.5.1+cu121-cp310-cp310-win_amd64.whl`，使用断点续传、连接超时 20 秒、低速超时 60 秒、总超时 900 秒及最多 2 次重试。本次一次下载完成，约 7 分 16 秒。
-
-下载大小 `2,449,372,784` bytes；SHA256 与官方索引一致：
-
-`9b22d6d98aa56f9317902dec0e066814a6edba1aada90110ceea2bb0678df22f`
-
-校验后才在项目 `.venv` 中执行本地 wheel 安装，未删除 venv，未更改系统 Python。系统 Python 的 `find_spec('torch')` 仍为 None。
-
-| 实测项 | 结果 |
+| 数据 | 实测 |
 |---|---|
-| torch version | `2.5.1+cu121` |
-| torch.version.cuda | `12.1` |
-| torch.cuda.is_available | True |
-| GPU name | NVIDIA GeForce RTX 4060 Laptop GPU |
-| CPU 与 CUDA Tensor matmul/backward | 通过，梯度有限 |
-| 完整官方 Actor-Critic CPU/CUDA 前后向 | 通过，2,086,600 参数 |
-| GPU 官方 PPO 更新及恢复 | 合成 RAM 数据通过；真实游戏不兼容，未执行 |
-| pip check | No broken requirements found |
+| 初始坐标 X / Y / map | 5 / 3 / 40 |
+| 队伍数量 / 首只 species | 1 / 177（Squirtle） |
+| Level / HP / max HP | 6 / 22 / 22 |
+| badges | 0 |
+| 非零事件字节 / masked event flags | 4 / 11 |
+| 连续 32 步奖励总和 | 0.015 |
+| 连续 128 步奖励总和 | 0.015 |
+| reset / render / close | 正常；重置后恢复初始数据 |
+| 时间预算耗尽逻辑 | 通过临时缩短测试实例剩余预算触发 truncation，再 reset；没有改训练配置或奖励 |
 
-CUDA PPO 单元测试第一轮 loss `0.03746623545885086`、恢复后 loss `0.19939640164375305`；检查所有 loss/梯度有限、参数实际改变、模型和 AdamW 状态一致、恢复后参数继续变化。数据明确为 `synthetic: true, real_game: false`。
+动作下标保持官方 `DOWN / LEFT / RIGHT / UP / A / B / START`，7 个动作全部执行；每次按 8 帧、松 16 帧。
 
-首次 CUDA DLL 导入较慢，最终成功；不是仅凭安装命令成功或 nvidia-smi 就判为通过。当前安装支持 `--device cpu` 和 `--device cuda`，两者均实测。依赖锁 `requirements-lock-cuda.txt` 已去除本地 wheel 绝对 URL，并保留精确版本及官方索引。
+| 观测模态 | 模型输入 shape | dtype / 范围 |
+|---|---|---|
+| screens | `(3,72,80)` | float32，[0,1]，当前和前两帧 |
+| map | `(1,48,48)` | float32，[0,1] |
+| events | `(827,)` | float32，0/1 |
+| game_state | `(12,)` | float32，声明 [-1,1]，6 个 HP 比例 + 6 个 level/100 |
 
-## 3. 实际执行命令
+证据：`artifacts/english-rom-compatibility/report.json`、`artifacts/english_game_check.json`。没有写入游戏 RAM、伪造事件或修改地址。
 
-以下均在现有项目目录中执行：
+## 4. 真实 PPO 更新和恢复：通过
+
+配置 `configs/smoke.yaml`：2 workers × 16 steps、1 epoch、2 minibatches，完整官方 2,086,600 参数模型，优化器 AdamW；采样在 CPU，优化在 CUDA。未改变 PPO 损失、GAE 或奖励函数。
+
+| 运行 | 累计训练步 / update | Loss | 最大参数变化 | 梯度范数 |
+|---|---|---:|---:|---:|
+| 首次真实更新 | 32 / 1 | 0.4105313420 | 0.0006017238 | 0.49999991 |
+| 加载后再次更新 | 64 / 2 | 0.1887938976 | 0.0006023832 | 0.49999988 |
+
+Loss、梯度和参数均有限，参数确实改变。每份 Checkpoint 保存后重新读取，模型权重一致；恢复载入模型、28 组 AdamW 参数状态、RNG、next_update 和 environment_steps；调度器按恢复 update 继续，Learning Rate 为 0.0003。
+
+真实 Checkpoint：
+
+- `artifacts/smoke-gpu/checkpoint_000000032.pt`
+- `artifacts/smoke-gpu-resumed/checkpoint_000000064.pt`
+
+两份 provenance 都记录 `device=cuda`、标准 ROM hash、初始状态 hash、seed=0、配置与来源。运行时 Git SHA 为 `9c26fc5...`，dirty=true（本轮文档/构建脚本准备中）；未改动 RL 模型、采样器或 PPO 源码。
+
+恢复会新建 episode，不恢复运行中的模拟器 RAM、worker RNG 或未结束 episode，因此不是轨迹逐位恢复。环境检查、启动前 7 个动作检查和观看中的游戏动作不计入这 64 个训练采样步。
+
+## 5. 观看、视频与正常结束
+
+`watch.py` 实际加载了真实 Checkpoint，模型自动输出动作。已用 computer-use 查看 CUDA 和 CPU 窗口，见到玩家移动、英文菜单及有效 HP/Level；没有用 LLM 控制动作。
+
+- CUDA：150 步正常结束，累计奖励 0.045，日志为 `artifacts/watch-gpu.log`。
+- CPU：100 步正常结束，累计奖励 0.030，日志为 `artifacts/watch-cpu.log`。
+- GPU 视频 `artifacts/watch-gpu.mp4`：150 帧，160×144，OpenCV 解码通过。
+- 额外退出检查中的物理 Esc 停止了 Computer Use；没有把此事件当作游戏退出键验收。Q/Esc/关闭窗口逻辑已实现，但独立交互退出键验证未完成；达到 `--steps` 上限后的正常清理和结束已通过。
+
+所有 Smoke 权重和窗口均明确标记 **Untrained Agent — 仅用于运行测试**。观看正常不能代表模型学会了游戏。
+
+## 6. 自动测试与 TensorBoard
+
+`pytest tests/phase1`：**11 passed，0 failed，0 skipped，4.61 秒**。仅有 SDL2 binaries 来源提示。
+
+涵盖 CPU/CUDA 模型与合成 PPO 更新、保存/恢复、Observation/Action/Reward fixture、TensorBoard、launcher 产物和错误 RAM 拒绝等。真实验收由上述独立命令执行，未混入合成测试数量。
+
+重新读取了真实 TensorBoard 文件：Loss、Reward、Learning Rate、environment_steps、参数变化在 32/64 步均存在且与 JSONL 一致。证据 `artifacts/real_tensorboard_readback.json`、`artifacts/final_acceptance_readback.json`、`artifacts/phase1-english-junit.xml`。
+
+## 7. 实际执行的主要命令
+
+在项目目录执行（构建工具下载 URL/hash 见上表）：
 
 ```powershell
-nvidia-smi
-Copy-Item neroRL/environments/poke_red/has_pokedex_nballs.state local/has_pokedex_nballs.state
-Get-FileHash -Algorithm SHA256 neroRL/environments/poke_red/has_pokedex_nballs.state,local/has_pokedex_nballs.state
-.\.venv\Scripts\python.exe scripts/probe_rom.py --rom local/PokemonRed.gbc
-# 预期退出码 2：兼容性拒绝；报告在 artifacts/rom-compatibility/
-
-curl.exe --fail --location --continue-at - --retry 2 --retry-delay 2 --connect-timeout 20 --speed-time 60 --speed-limit 1024 --max-time 900 --output "work/torch-2.5.1+cu121-cp310-cp310-win_amd64.whl" "https://download.pytorch.org/whl/cu121/torch-2.5.1%2Bcu121-cp310-cp310-win_amd64.whl"
-.\.venv\Scripts\python.exe work/verify_wheel.py
-.\.venv\Scripts\python.exe -m pip install --no-deps --timeout 30 --retries 2 "work/torch-2.5.1+cu121-cp310-cp310-win_amd64.whl"
-.\.venv\Scripts\python.exe scripts/check_cuda.py
-.\.venv\Scripts\python.exe -m pip check
-.\.venv\Scripts\python.exe -m pytest tests/phase1 -q --junitxml=artifacts/phase1-cuda-junit.xml
-.\.venv\Scripts\python.exe scripts/doctor.py
-.\.venv\Scripts\python.exe -m compileall -q reproduction scripts tests/phase1
+git clone --depth 1 https://github.com/pret/pokered.git work/pokered
+git -C work/pokered rev-parse HEAD
+Get-Content work/pokered/.rgbds-version
+tar.exe -xf work/w64devkit-x64-2.10.1.7z.exe -C work
+.\scripts\build_red.ps1
+.\.venv\Scripts\python.exe scripts/probe_rom.py --rom local/PokemonRed.gb --out artifacts/english-rom-compatibility
+.\.venv\Scripts\python.exe scripts/check_game.py --steps 128 --out artifacts/english_game_check.json
+.\.venv\Scripts\python.exe scripts/train.py --config configs/smoke.yaml --seed 0 --total-steps 32 --device cuda --out artifacts/smoke-gpu
+.\.venv\Scripts\python.exe scripts/train.py --config artifacts/smoke-gpu/config.yaml --resume artifacts/smoke-gpu/checkpoint_000000032.pt --total-steps 64 --device cuda --out artifacts/smoke-gpu-resumed
+.\.venv\Scripts\python.exe -m pytest tests/phase1 -q --junitxml=artifacts/phase1-english-junit.xml
+.\.venv\Scripts\python.exe scripts/watch.py --checkpoint artifacts/smoke-gpu/checkpoint_000000032.pt --device cuda --speed 1 --steps 150 --video artifacts/watch-gpu.mp4
+.\.venv\Scripts\python.exe scripts/watch.py --checkpoint artifacts/smoke-gpu-resumed/checkpoint_000000064.pt --device cpu --speed 1 --steps 100
 ```
 
-另外运行了忽略目录中的 `work/state_diag.py`，逐帧读取 PC/SP 和原 RAM 地址，没有写入状态。通过 `work/preview_rom.py` 打开真实 PyBoy SDL 窗口，用 computer-use 检查实际画面并按 Enter，观察到中文剧情；窗口有自动结束期限，没有留后台模拟或训练。
+已有输出目录不要覆盖。用户观看命令：
 
-生产入口的 `validate_inputs(..., 'local/PokemonRed.gbc', ...)` 仍明确报 `Unsupported ROM SHA1`；未添加白名单或静默绕过。用户拿到匹配版本后可直接使用原 README 的 32 步训练、恢复和 watch 命令。
+```powershell
+.\.venv\Scripts\python.exe scripts/watch.py --checkpoint artifacts/smoke-gpu-resumed/checkpoint_000000064.pt --device cuda --speed 1 --steps 300
+```
 
-## 4. 测试数量与验收边界
+## 8. 范围、Git 与后续工作
 
-**自动测试：11 passed，0 failed，0 skipped，5.53 秒。** 一条 SDL2 binaries 来源提示，不是错误。比之前增加了 CUDA PPO 用例实际执行和两项 RAM 语义回归检查。
+本阶段只验证训练管线。没有通关或城市里程碑成功率，没有大规模实验、百万步训练或训练监督系统；论文与固定源码的奖励差异仍见 `docs/baseline_comparison.md`，不能宣称严格数值复现。
 
-通过内容：PyBoy 原创诊断卡带、官方 Observation/Action/Reward 的合成 fixture、CPU/CUDA 官方 PPO 更新及恢复、模型输出、TensorBoard、launcher 产物、论文配置分离、非法 RAM 语义拒绝。
+ROM、状态、模型、日志、录像及 pret 构建源码/工具均保留在 Git 忽略目录。只提交脚本、说明、配置和文本报告；保留 MIT/NOTICE。本次完成本地整理，未发布 GitHub Public 仓库。
 
-**真实输入验收：ROM+官方状态兼容性 1 项失败。** 原始 ROM 启动/画面/Enter 通过；状态恢复后的游戏语义失败。自动测试通过不等于此真实验收通过。
-
-因用户要求“ROM 兼容性成功后才训练”，没有启动真实 32 步 PPO，没有生成真实 Checkpoint，没有执行模型控制游戏的 `watch.py`。原始模拟器启动画面可见，不应表述成 AI watch 已成功。此前短程固定动作诊断也不属于 PPO 训练。
-
-## 5. 本地证据和下一步
-
-- `artifacts/cuda-wheel-verification.json`：下载来源、大小和校验。
-- `artifacts/cuda-validation.json`、`artifacts/doctor.json`：GPU、CPU/CUDA 张量与网络结果。
-- `artifacts/phase1-cuda-junit.xml`：11 项测试。
-- `artifacts/synthetic-cuda/result.json`、`checkpoint.pt`：仅合成测试。
-- `artifacts/rom-compatibility/report.json`、`probe.log`、`cpu_trace.json`：真实失败及逐帧 RAM/PC。
-- 同目录 PNG：启动、中文标题/菜单、官方状态载入和失败后画面。均为忽略本地素材，不提交。
-
-后续需要合法、匹配的英文原版 ROM。无需重装环境。先运行 check_game，再做 32 步训练、恢复至累计 64 步、watch；最小验收后停止。不能仅给当前修改版另存一个状态就宣称论文环境复现成功。
-
-本轮保留本地仓库，更新 README、progress、HANDOFF。核心真实验收失败，故未发布 GitHub Public 仓库。ROM、游戏状态、截图、模型、wheel 均不在 Git 文件或提交历史中；未修改论文算法，未进行长训。
+后续 Agent 可直接使用当前环境与累计 64 步的真实 Checkpoint。长训应在新任务授权、资源评估和独立终端中安排；Smoke 配置累计上限仍是 256，不会自动扩容。当前没有后台训练。

@@ -1,13 +1,13 @@
-# 下一位 Agent 的接管说明
+# 后续 Agent 接管说明
 
-1. 项目 `C:\Users\lihao\Desktop\pokemon-red-rl-reproduction`；Python `.venv\Scripts\python.exe`。先读 `docs/reports/progress.md` 和 `phase1_validation.md`。不必重装环境。
-2. 用户已提供 `local/PokemonRed.gbc`（2 MiB，中文修改版，SHA1 `944ff0b461fb570d2c8aa99d819e8c8df0bdc446`）。可启动和按 Enter，但与官方初始状态执行不兼容：两帧后 party=57、Level=0、HP=57/14592、PC=0x0038，首步奖励 1258.005。不要重复对这份输入训练，不要更改奖励/内存地址/状态来强行通过。诊断命令 `scripts/probe_rom.py --rom local/PokemonRed.gbc` 退出码 2。
-3. 仍需合法且匹配的英文原版 ROM（预期 SHA1 `ea9bcae617fdf159b045185467ae58b2e4a48b9a`），放 `local/PokemonRed.gb`。官方状态已按用户授权从固定上游复制到 `local/has_pokedex_nballs.state`，SHA256 `0ff708b3dcdfa6c1f5fc07687b1641247017b1eb8a9a8b7c6eb0dd988431bd7e`，不会上传。
-4. 先 doctor、pytest、check_game 128 步，再按 README 训练到 32、恢复到 64、最后 watch 验证画面和退出。完成即停，不在 Codex 中长训。
-5. 官方分支/固定 SHA 见 `UPSTREAM.json`。局部修复 dtype、close、headless speed、worker 参数/清理、有限数值检查和打包依赖。PPO 损失、模型、GAE、AdamW 复用官方。
-6. `smoke.yaml` 联调；`paper_baseline.yaml` 保留论文参数。代码与论文的奖励/episode 差异见 `docs/baseline_comparison.md`，不静默改变算法。
-7. `artifacts/synthetic-cpu/checkpoint.pt` 仅合成测试。真实预期 `artifacts/smoke/checkpoint_000000032.pt` 尚不存在。恢复使用原输出的 `config.yaml`，恢复模型/AdamW/RNG/调度 update，不恢复运行中的游戏。
-8. RTX 4060 8 GB + 16 GB RAM；当前已安装 `torch==2.5.1+cu121`，CUDA True，CPU/CUDA Tensor 和官方网络前后向、CUDA 合成 PPO 更新/恢复均实测通过。不要重新安装。官方 wheel 已校验 SHA256，缓存 `work/torch-2.5.1+cu121-cp310-cp310-win_amd64.whl`；完整依赖 `requirements-lock-cuda.txt`。
-9. 输出有配置、seed、Git SHA、输入 hash、JSONL、TensorBoard、checkpoint；目录全新，total-steps 是累计整批目标；Smoke 上限 256。
-10. ROM、状态、模型、大日志均忽略。原始上游 Git 保存在 `local/upstream.git`，含状态历史，禁止推送。上游 `.state` 只作本地参考，不作为公开素材。
-11. 核心验收未完成，不创建 Public 仓库。待真实验收通过、报告更新且认证正常，用户已条件性授权发布 `pokemon-red-rl-reproduction`。保留 MIT/NOTICE，先审查文件与历史。
+1. 项目 `C:\Users\lihao\Desktop\pokemon-red-rl-reproduction`，解释器 `.venv\Scripts\python.exe`。基础真实验收已经通过，不必重装。当前 torch 2.5.1+cu121，CUDA True，RTX 4060 8 GB，系统 RAM 约 16 GB。
+2. 正确 ROM 是 `local/PokemonRed.gb`，1 MiB，SHA1 `ea9bcae617fdf159b045185467ae58b2e4a48b9a`。用户确认合法使用权后，从 pret/pokered 固定 SHA `af519899719f0754965776faac0e836a3b906e6d` + RGBDS 1.0.4 构建，未修改字节。旧中文 `PokemonRed.gbc` 不兼容，不要再适配或换名使用。
+3. 官方初始状态已在 `local/has_pokedex_nballs.state`，SHA256 `0ff708b3dcdfa6c1f5fc07687b1641247017b1eb8a9a8b7c6eb0dd988431bd7e`。初始坐标 5/3/map40，杰尼龟 Level6、HP22/22；英文原版继续运行正常。
+4. 真实 CUDA 训练已完成一次 32 步更新，再恢复到累计 64 步。最新真实 Checkpoint：`artifacts/smoke-gpu-resumed/checkpoint_000000064.pt`；原始 32 步权重：`artifacts/smoke-gpu/checkpoint_000000032.pt`。`artifacts/synthetic-*` 仅合成测试，不要混淆。
+5. 恢复用原输出的 `config.yaml`，严格校验配置。恢复模型、AdamW、主进程 RNG、update 和总步数，调度按 update 继续；不恢复中途模拟器或 worker RNG，会重开 episode。输出必须全新目录，`--total-steps` 是累计整批目标。
+6. 观看命令见 README，可用 CPU/CUDA。Smoke 权重仍明确标记 Untrained Agent。画面、150 帧录像解码和步数上限正常结束均通过；Q/Esc 交互退出未完成独立验证，物理 Esc 曾停止 Computer Use，不能把它算作游戏按键验收。
+7. `configs/smoke.yaml` 为 2×16、1 epoch、2 minibatches，累计硬上限 256。用户没有授权在本阶段长训；不要自动追加训练。论文 `paper_baseline.yaml` 规模不能直接套用到本机 16 GB RAM。
+8. PPO、GAE、网络和奖励复用官方 neroRL `poke_red`，SHA 见 `UPSTREAM.json`。不要改算法来解决输入问题。已知论文/源码差异见 `docs/baseline_comparison.md`。
+9. 构建源码和工具在忽略的 `work/`：w64devkit 2.10.1（Make4.4.1/GCC16.2）、RGBDS1.0.4、pokered。`scripts/build_red.ps1` 可在已有工具上重复构建并校验。Cygwin 安装曾被自动审批拒绝，便携工具方案已成功，不必安装 WSL/Cygwin。
+10. 当前报告 `docs/reports/phase1_validation.md`，历史修改版失败报告 `rom_cuda_validation_previous.md`；Junit、训练 JSONL、TensorBoard 和最终读回证据在 `artifacts/`。自动测试 11 passed。不要重新训练来生成相同证据。
+11. ROM、状态、源码素材、模型、视频、工具和大日志均不上传。原始上游 Git 归档 `local/upstream.git` 也含状态历史，禁止推送。本地公开代码保留 MIT/NOTICE，尚未创建 GitHub 仓库。
