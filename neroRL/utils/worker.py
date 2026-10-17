@@ -1,0 +1,113 @@
+import multiprocessing
+import multiprocessing.connection
+import psutil
+from random import randint
+
+from neroRL.environments.wrapper import wrap_environment
+
+def set_cpu_affinity_and_priority(rank):
+    p = psutil.Process()
+    available_cores = p.cpu_affinity()
+    cpu_to_use = available_cores[rank % len(available_cores)]
+    p.cpu_affinity([cpu_to_use])
+    # try:
+    #     p.nice(psutil.HIGH_PRIORITY_CLASS)
+    # except AttributeError:
+    #     try:
+    #         p.nice(-10)
+    #     except PermissionError:
+    #         pass
+
+def worker_process(remote: multiprocessing.connection.Connection, env_seed, env_config, rank: int, worker_id: int, record_video = False):
+    """Initializes the environment and executes its interface.
+
+    Arguments:
+        remote {multiprocessing.connection.Connection} -- Parent thread
+        env_seed {int} -- Sampled seed for the environment worker to use
+        env_config {dict} -- The configuration data of the desired environment
+        rank {int} -- The rank of the worker's process
+        worker_id {int} -- Id for the environment's process. This is necessary for Unity ML-Agents environments, because these operate on different ports.
+        record_video {bool} -- Whether the worker should record video data
+    """
+    # Set CPU affinity and priority
+    set_cpu_affinity_and_priority(rank)
+
+    # Set seed for this thread
+    import numpy as np
+    np.random.seed(env_seed)
+    import random
+    random.seed(env_seed)
+    random.SystemRandom().seed(env_seed)
+
+    # Initialize and wrap the environment
+    try:
+        env = wrap_environment(env_config, worker_id, record_trajectory = record_video)
+    except KeyboardInterrupt:
+        pass
+
+    # Communication interface of the environment thread
+    while True:
+        try:
+            cmd, data = remote.recv()
+            if cmd == "step":
+                remote.send(env.step(data))
+            elif cmd == "reset":
+                remote.send(env.reset(data))
+            elif cmd == "close":
+                remote.send(env.close())
+                remote.close()
+                break
+            elif cmd == "video":
+                remote.send(env.get_episode_trajectory)
+            else:
+                raise NotImplementedError
+        except Exception as e:
+            raise WorkerException(e)
+
+class Worker:
+    """A worker that runs one thread and controls its own environment instance."""
+    child: multiprocessing.connection.Connection
+    process: multiprocessing.Process
+    
+    def __init__(self, env_config, rank:int, worker_id: int, record_video = False):
+        """
+        Arguments:
+            env_config {dict -- The configuration data of the desired environment
+            rank {int} -- The rank of the worker's process
+            worker_id {int} -- worker_id {int} -- This id is necessary for Unity ML-Agents environments, because these add an offset to the communication port.
+            record_video {bool} -- Whether the worker should record video data
+        """
+        env_seed = randint(0, 2 ** 32 - 1)
+        self.child, parent = multiprocessing.Pipe()
+        self.process = multiprocessing.Process(target=worker_process, args=(parent, env_seed, env_config, rank, worker_id, record_video))
+        self.process.start()
+        parent.close()
+
+    def close(self):
+        try:
+            if self.process.is_alive():
+                self.child.send(("close", None))
+                if self.child.poll(5):
+                    self.child.recv()
+        except (EOFError, BrokenPipeError, OSError):
+            pass
+        finally:
+            self.process.join(timeout=5)
+            if self.process.is_alive():
+                self.process.terminate()
+                self.process.join(timeout=5)
+            self.child.close()
+
+
+import tblib.pickling_support
+tblib.pickling_support.install()
+import sys
+
+class WorkerException(Exception):
+    def __init__(self, ee):
+        self.ee = ee
+        __,  __, self.tb = sys.exc_info()
+        super(WorkerException, self).__init__(str(ee))
+
+    def re_raise(self):
+        raise (self.ee, None, self.tb)
