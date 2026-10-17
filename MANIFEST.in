@@ -3,3 +3,11 @@ recursive-include . *.yaml
 recursive-include . *.txt
 recursive-include . *.html
 include LICENSE
+include NOTICE.md
+include UPSTREAM.json
+prune .venv
+prune local
+prune artifacts
+prune work
+prune session
+global-exclude *.gb *.gbc *.gba *.rom *.state *.sav *.pt *.pth *.ckpt .env .env.*
