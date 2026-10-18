@@ -161,9 +161,10 @@ as a decimal constant with a comment.
 
 ## 6. README rewrite
 
-`README.md` was rewritten as **"Pokémon Red Autonomous Agent — Vision-Based
-Autonomous Exploration and Multi-Agent Decision-Making"** with the requested
-sections:
+`README.md` was rewritten in **Chinese** for the intended academic audience (the
+project title and subtitle keep their English form) as **"Pokémon Red Autonomous
+Agent — Vision-Based Autonomous Exploration and Multi-Agent Decision-Making"**
+with the requested sections:
 
 1. Project Overview (blind first-player constraints; no RAM/walkthrough).
 2. Research Questions (visual modelling, exploration, long-horizon decisions,
