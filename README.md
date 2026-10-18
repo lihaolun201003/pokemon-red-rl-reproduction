@@ -71,6 +71,77 @@ py -3.10 -m venv .venv
 .\.venv\Scripts\python.exe scripts\check_game.py --steps 128
 ```
 
+## DeepSeek LLM Agent（让 DeepSeek 自己玩，独立于 PPO）
+
+`llm_agent/` 是一个**独立于 PPO 训练管线**的游戏智能体：由 DeepSeek 官方 API（默认模型 `deepseek-flash`，支持视觉与工具调用）直接驱动，通过真实游戏截图观察、自主决策，并通过**受约束的工具调用**在 PyBoy 中按键。
+
+```
+DeepSeek Brain → 工具调用 → PyBoy → 截图 → DeepSeek Brain
+```
+
+### 首次真实运行结果（诚实版，2026-10-18）
+
+- 真实 `deepseek-flash` API 驱动真实模拟器连续运行：**228 次真实决策 / 250 次工具调用（0 错误）**，总费用约 **$0.055**（962,983 输入 tokens，缓存命中约 70.6%，平均延迟 5.81 s/决策）；
+- 真实进度（独立 RAM 探针核验）：**离开初始房间**，探索 Pallet Town 外景并走到 **Route 1 草地**，经历多场真实野生战斗（Rattata/Pidgey），起始宝可梦 **L6 → L7**；
+- **未获得任何徽章、未到达新城镇、未通关**；实现仍保留在可继续运行状态（记忆/检查点/心理地图都会持久化）；
+- 完整报告：[首次真实游戏运行报告](docs/reports/llm_agent_run_report.md)；API/离线验收：[验收记录](docs/reports/llm_agent_validation.md)；设计：[设计说明](docs/reports/llm_agent_design.md)。
+
+### 盲探索原则（Blind Exploration）
+
+- Agent 的决策回路只能看到：真实 160x144 游戏画面、它自己记录的记忆、动作历史、预算与时钟。**不读取隐藏 RAM、地图、剧情 Flag、徽章位置或 NPC 位置**，也不预置攻略/通关路线。
+- 全部记忆只能由真实观察产生（画面、游戏内 NPC 对话、失败的尝试）。允许基于自建记忆的重复区域寻路、总结与复盘。
+- 唯一的 RAM 读取模块是 `llm_agent/progress.py`（**仅供运行报告/测试的独立进度核验**），`tests/llm_agent/test_import_boundaries.py` 强制禁止决策回路导入它、禁止硬编码 RAM 地址、禁止系统提示词包含剧情地名/角色。
+- 模型可能带有预训练记忆：系统提示词要求所有行动必须能被截图或已记录观察解释，记忆中的猜测只能作为待验证假设，且记录前必须先在画面中确认。
+
+### 快速开始
+
+1. 配置密钥（任选其一；不会被打印、写日志或提交 git）：
+   - 项目根目录创建 `.env`（参考 [.env.example](.env.example)）：`DEEPSEEK_API_KEY=sk-...`
+   - 或 PowerShell：`$env:DEEPSEEK_API_KEY = 'sk-...'`
+2. 先做真实 API 验收（文本 / 视觉读图 / 工具调用 / 错误处理，全部真实请求）：
+   ```powershell
+   .\.venv\Scripts\python.exe scripts\llm_agent_api_probe.py
+   ```
+3. 启动 Agent：
+   ```powershell
+   # 实时观看窗口：画面 + 当前目标 + 最近动作 + 决策摘要 + 步数 + 已发现地点 + API 调用与费用 + 状态；
+   # 支持暂停/继续、保存进度、安全退出；可 --video 录制演示 MP4
+   .\.venv\Scripts\python.exe scripts\run_llm_agent.py
+   # 无人值守后台运行（无 GUI；默认单次预算 $2，达上限自动安全暂停并保存）
+   .\.venv\Scripts\python.exe scripts\run_llm_agent.py --headless --max-usd 2 --max-calls 3000
+   # 同一运行目录断点续跑（默认自动恢复该目录最新 checkpoint）
+   .\.venv\Scripts\python.exe scripts\run_llm_agent.py --headless --run-dir artifacts\llm_agent\runs\run_xxx
+   # 从其他 run 的 checkpoint 续跑
+   .\.venv\Scripts\python.exe scripts\run_llm_agent.py --headless --resume-from artifacts\llm_agent\runs\run_xxx
+   # 开发自测：确定性测试脑，不调用 API（不是验收证据）
+   .\.venv\Scripts\python.exe scripts\run_llm_agent.py --headless --scripted --max-turns 8
+   ```
+4. 输出与审计（每次 run 一个目录）：
+   - `run.json` / `metrics.json` / `report.md`（中文运行报告，含诚实性声明）
+   - `audit/decisions.jsonl`（每次 DeepSeek 决策：理由、工具调用、tokens、费用、延迟）
+   - `audit/actions.jsonl`（逐工具执行结果）、`audit/api_attempts.jsonl`（重试/错误，已脱敏）、`audit/errors.jsonl`、`audit/events.jsonl`
+   - `screens/`（动作截图）、`checkpoints/`（合法模拟器状态 + 记忆快照）、`errors/`（异常现场）
+5. 独立核验真实游戏进度（RAM 探针，仅用于报告，不进入 Agent 决策）：
+   ```powershell
+   .\.venv\Scripts\python.exe scripts\llm_agent_progress.py --run-dir artifacts\llm_agent\runs\run_xxx
+   ```
+
+### 成本控制与长期运行
+
+- 默认 `thinking=disabled`（省钱）；需要更强规划时可 `--thinking enabled --reasoning-effort low`。
+- 每次请求前按**最坏情况**估算费用，达到单次/累计预算、调用次数或每小时调用上限时安全暂停并保存进度，绝不继续扣费。
+- API 401/402 立即 blocked 并保存状态（等待人工处理）；429/5xx/超时按指数退避重试，连续失败超过阈值标记 blocked。
+- 单实例文件锁防止两个 Agent 同时控制同一游戏状态；`--stop-file` / `--pause-file` 支持外部控制；Ctrl+C 或关闭观看窗口都会安全保存退出。
+- 周期性保存模拟器状态 + 记忆；模拟器异常时保存错误现场并尝试从合法 checkpoint 恢复。
+
+### 测试
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\llm_agent -q   # 不需要 API Key、不联网
+```
+
+> 诚实性说明：`--scripted` 只是本地流程自测，**不得作为真实 API/游戏验收证据**；所有验收结论必须来自配置真实 `DEEPSEEK_API_KEY` 的运行目录、`audit/` 日志与独立 RAM 探针报告。
+
 ## 训练
 
 ```powershell

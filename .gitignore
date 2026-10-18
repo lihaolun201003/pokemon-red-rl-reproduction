@@ -34,4 +34,11 @@ work/
 *.log
 .env
 .env.*
+# keep the checked-in configuration example (contains no secrets)
+!.env.example
 .pytest_cache/
+
+# DeepSeek LLM agent runtime data (gameplay memory is local-only)
+llm_agent/memory/*
+!llm_agent/memory/.gitignore
+!llm_agent/memory/README.md
