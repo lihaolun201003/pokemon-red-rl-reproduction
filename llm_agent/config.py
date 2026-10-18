@@ -238,6 +238,81 @@ class ViewerConfig:
     auto_close_on_finish: bool = False
 
 
+@dataclass
+class MultiAgentConfig:
+    """Pokémon Red Multi-Agent v1: Game Director + three specialised agents.
+
+    The director is a deterministic Python state machine; DeepSeek is only asked
+    for high-level coordination during conflict/stagnation.  All switches here
+    are hard budgets/safety limits, never game knowledge.
+    """
+
+    #: master switch; when False ``run_llm_agent.py`` behaves exactly as before
+    enabled: bool = False
+    #: evidence / state root (resolved to <run_dir>/multi_agent when empty)
+    artifact_root: str = ""
+    # -- per-agent models (empty string = follow api.model) ----------------- #
+    director_model: str = ""
+    story_model: str = ""
+    pokemon_model: str = ""
+    #: navigation stays deterministic (no LLM); reserved for future use
+    navigation_model: str = ""
+    # -- per-agent API budgets (0 = only the global budget applies) --------- #
+    max_usd_director: float = 0.60
+    max_usd_story: float = 1.20
+    max_usd_pokemon: float = 1.60
+    max_calls_director: int = 40
+    max_calls_story: int = 90
+    max_calls_pokemon: int = 140
+    # -- agent request shape (cheap vision + short answers) ----------------- #
+    max_tokens_agent: int = 400
+    image_scale_agent: int = 3
+    thinking_agent: str = "disabled"
+    # -- director LLM triggering (must stay rare) --------------------------- #
+    director_llm_enabled: bool = True
+    director_llm_min_interval_s: float = 90.0
+    director_llm_on_stagnation_only: bool = True
+    director_llm_max_tokens: int = 700
+    # -- bounded agent steps ------------------------------------------------ #
+    director_max_steps: int = 500
+    navigation_steps_per_task: int = 120
+    dialogue_max_turns: int = 14
+    battle_max_turns: int = 24
+    # -- persistence paths (empty = resolved under <run_dir>/multi_agent) --- #
+    bus_path: str = ""
+    shared_memory_root: str = ""
+    agent_memory_root: str = ""
+    # -- checkpoint / branch policy ---------------------------------------- #
+    checkpoint_every_actions: int = 40
+    checkpoint_every_minutes: float = 8.0
+    # -- recovery budgets --------------------------------------------------- #
+    max_rollbacks_per_branch: int = 2
+    max_rollbacks_total: int = 4
+    max_l2_reviews: int = 8
+    rollback_cooldown_s: float = 90.0
+    max_consecutive_failures: int = 5
+    # -- progress monitor thresholds --------------------------------------- #
+    local_stagnation_steps: int = 60
+    global_stagnation_seconds: float = 900.0
+    repeated_failure_limit: int = 4
+    repeated_message_limit: int = 3
+    no_progress_action_limit: int = 150
+    training_grace_seconds: float = 300.0
+    # -- hard runtime limits ------------------------------------------------ #
+    max_runtime_minutes: float = 120.0
+    max_emulator_actions: int = 20000
+    max_task_queue: int = 200
+    # -- evidence / observability ------------------------------------------ #
+    save_screenshots: bool = True
+    screenshot_every_decisions: int = 1
+    log_messages: bool = True
+    viewer_panel: bool = True
+    #: stop after this many completed director steps when > 0 (acceptance runs)
+    max_decision_turns: int = 0
+    #: directory for the run's acceptance evidence (screens/audit/checkpoints)
+    evidence_root: str = ""
+
+
 # --------------------------------------------------------------------------- #
 # Root config
 # --------------------------------------------------------------------------- #
@@ -252,6 +327,7 @@ class AgentConfig:
     navigation: NavigationConfig = field(default_factory=NavigationConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     viewer: ViewerConfig = field(default_factory=ViewerConfig)
+    multi_agent: MultiAgentConfig = field(default_factory=MultiAgentConfig)
     config_path: str = ""
     env_file: str = DEFAULT_ENV_FILE
     #: optional human-readable label for this run
@@ -305,6 +381,23 @@ class AgentConfig:
             self.navigation.world_root = str(run_dir / "navigation")
         Path(self.navigation.world_root).mkdir(parents=True, exist_ok=True)
         Path(self.memory.root).mkdir(parents=True, exist_ok=True)
+        # -- multi-agent runtime layout (only when the mode is enabled) ------ #
+        if self.multi_agent.enabled:
+            ma_root = Path(self.multi_agent.artifact_root or (run_dir / "multi_agent"))
+            self.multi_agent.artifact_root = str(ma_root)
+            for sub in ("agents", "agents/story", "agents/pokemon", "agents/navigation",
+                        "shared_memory", "branches", "evidence", "screens"):
+                (ma_root / sub).mkdir(parents=True, exist_ok=True)
+            if not self.multi_agent.bus_path:
+                self.multi_agent.bus_path = str(ma_root / "event_bus.jsonl")
+            if not self.multi_agent.shared_memory_root:
+                self.multi_agent.shared_memory_root = str(ma_root / "shared_memory")
+            if not self.multi_agent.agent_memory_root:
+                self.multi_agent.agent_memory_root = str(ma_root / "agents")
+            Path(self.multi_agent.shared_memory_root).mkdir(parents=True, exist_ok=True)
+            if not self.multi_agent.evidence_root:
+                self.multi_agent.evidence_root = str(ma_root / "evidence")
+            Path(self.multi_agent.evidence_root).mkdir(parents=True, exist_ok=True)
         return run_dir
 
     # -- validation ------------------------------------------------------- #
@@ -366,6 +459,40 @@ class AgentConfig:
         check(1 <= self.viewer.scale <= 8, "viewer.scale must be in 1..8")
         check(self.viewer.video_fps >= 1, "viewer.video_fps must be >= 1")
         check(8 <= self.viewer.refresh_ms <= 500, "viewer.refresh_ms must be in 8..500")
+
+        # -- multi-agent v1 --------------------------------------------------- #
+        check(self.multi_agent.max_usd_director >= 0, "multi_agent.max_usd_director must be >= 0")
+        check(self.multi_agent.max_usd_story >= 0, "multi_agent.max_usd_story must be >= 0")
+        check(self.multi_agent.max_usd_pokemon >= 0, "multi_agent.max_usd_pokemon must be >= 0")
+        check(self.multi_agent.max_calls_director >= 0, "multi_agent.max_calls_director must be >= 0")
+        check(self.multi_agent.max_calls_story >= 0, "multi_agent.max_calls_story must be >= 0")
+        check(self.multi_agent.max_calls_pokemon >= 0, "multi_agent.max_calls_pokemon must be >= 0")
+        check(1 <= self.multi_agent.max_tokens_agent <= 8192,
+              "multi_agent.max_tokens_agent must be in 1..8192")
+        check(1 <= self.multi_agent.image_scale_agent <= 8,
+              "multi_agent.image_scale_agent must be in 1..8")
+        check(self.multi_agent.thinking_agent in ("disabled", "enabled"),
+              "multi_agent.thinking_agent must be disabled|enabled")
+        check(self.multi_agent.director_llm_min_interval_s >= 0,
+              "multi_agent.director_llm_min_interval_s must be >= 0")
+        check(self.multi_agent.director_max_steps >= 1, "multi_agent.director_max_steps must be >= 1")
+        check(self.multi_agent.navigation_steps_per_task >= 1,
+              "multi_agent.navigation_steps_per_task must be >= 1")
+        check(1 <= self.multi_agent.dialogue_max_turns <= 200,
+              "multi_agent.dialogue_max_turns must be in 1..200")
+        check(1 <= self.multi_agent.battle_max_turns <= 200,
+              "multi_agent.battle_max_turns must be in 1..200")
+        check(self.multi_agent.checkpoint_every_actions >= 1,
+              "multi_agent.checkpoint_every_actions must be >= 1")
+        check(self.multi_agent.max_rollbacks_per_branch >= 0,
+              "multi_agent.max_rollbacks_per_branch must be >= 0")
+        check(self.multi_agent.max_rollbacks_total >= 0,
+              "multi_agent.max_rollbacks_total must be >= 0")
+        check(self.multi_agent.max_runtime_minutes >= 0,
+              "multi_agent.max_runtime_minutes must be >= 0")
+        check(self.multi_agent.max_emulator_actions >= 0,
+              "multi_agent.max_emulator_actions must be >= 0")
+        check(self.multi_agent.max_task_queue >= 1, "multi_agent.max_task_queue must be >= 1")
         return problems
 
     # -- loading ---------------------------------------------------------- #

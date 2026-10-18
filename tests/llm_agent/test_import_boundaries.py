@@ -54,6 +54,40 @@ NAVIGATION_MODULES = [
     "viz.py",
 ]
 
+#: Multi-agent v1 modules (director/bus/arbiter/tasks/memory/agents integration).
+#: They must obey the same blind-exploration boundary: screenshots + verified
+#: actions only, never RAM, never the verification-only probe, never PyBoy.
+MULTI_AGENT_MODULES = [
+    "contracts.py",
+    "event_bus.py",
+    "control_arbiter.py",
+    "task_manager.py",
+    "scheduler.py",
+    "shared_memory.py",
+    "progress_monitor.py",
+    "recovery.py",
+    "checkpoint.py",
+    "agent_registry.py",
+    "agent_context.py",
+    "model_router.py",
+    "director.py",
+    "integration.py",
+]
+
+#: Story / Pokémon professional agent packages (own prompts, tools, memory).
+PROFESSIONAL_AGENT_MODULES = [
+    "story/__init__.py",
+    "story/agent.py",
+    "story/memory.py",
+    "story/prompts.py",
+    "story/tools.py",
+    "pokemon/__init__.py",
+    "pokemon/agent.py",
+    "pokemon/memory.py",
+    "pokemon/prompts.py",
+    "pokemon/tools.py",
+]
+
 #: The only modules allowed to import the verification-only probe / PyBoy.
 PYBOY_ALLOWED = {"emulator.py", "progress.py"}
 
@@ -276,3 +310,92 @@ def test_api_client_never_hardcodes_a_key() -> None:
 @pytest.mark.parametrize("module", ["config", "contracts", "dotenv", "progress"])
 def test_lead_modules_import_cleanly(module: str) -> None:
     __import__(f"llm_agent.{module}")
+
+
+# --------------------------------------------------------------------------- #
+# Multi-agent v1 boundaries: same blind-exploration guarantees
+# --------------------------------------------------------------------------- #
+
+def _relative_path(name: str) -> Path:
+    """Resolve a module path inside the package (supports ``sub/module.py``)."""
+    path = PACKAGE / name
+    assert path.is_file(), f"expected module missing: {path}"
+    return path
+
+
+def test_multi_agent_modules_import_no_hidden_state() -> None:
+    for name in MULTI_AGENT_MODULES:
+        imports = _imported_modules(_relative_path(f"multi_agent/{name}"))
+        forbidden = {
+            module
+            for module in imports
+            if module == "llm_agent.progress"
+            or module.startswith("llm_agent.progress.")
+            or module == "pyboy"
+            or module.startswith("pyboy.")
+        }
+        assert not forbidden, f"multi_agent/{name} imports hidden state: {forbidden}"
+
+
+def test_multi_agent_modules_have_no_ram_addresses() -> None:
+    offenders: list[str] = []
+    for name in MULTI_AGENT_MODULES:
+        text = _relative_path(f"multi_agent/{name}").read_text(encoding="utf-8")
+        for match in RAM_ADDRESS.finditer(text):
+            offenders.append(f"multi_agent/{name}: {match.group(0)}")
+    assert not offenders, f"RAM addresses leaked into multi_agent: {offenders}"
+
+
+def test_multi_agent_prompts_have_no_story_spoilers() -> None:
+    for name in ("director.py", "integration.py", "shared_memory.py", "agent_context.py"):
+        lowered = _relative_path(f"multi_agent/{name}").read_text(encoding="utf-8").lower()
+        found = [term for term in FORBIDDEN_PROMPT_TERMS if term in lowered]
+        assert not found, f"multi_agent/{name} leaks story knowledge: {found}"
+
+
+def test_professional_agent_modules_respect_boundaries() -> None:
+    for name in PROFESSIONAL_AGENT_MODULES:
+        path = _relative_path(name)
+        imports = _imported_modules(path)
+        forbidden = {
+            module
+            for module in imports
+            if module == "llm_agent.progress"
+            or module.startswith("llm_agent.progress.")
+            or module == "pyboy"
+            or module.startswith("pyboy.")
+        }
+        assert not forbidden, f"{name} imports hidden state: {forbidden}"
+        text = path.read_text(encoding="utf-8")
+        for match in RAM_ADDRESS.finditer(text):
+            assert not match, f"{name} contains RAM address {match.group(0)}"
+
+
+def test_professional_agent_prompts_have_no_story_spoilers() -> None:
+    for name in ("story/prompts.py", "story/agent.py", "story/memory.py", "story/tools.py",
+                 "pokemon/prompts.py", "pokemon/agent.py", "pokemon/memory.py", "pokemon/tools.py"):
+        lowered = _relative_path(name).read_text(encoding="utf-8").lower()
+        found = [term for term in FORBIDDEN_PROMPT_TERMS if term in lowered]
+        assert not found, f"{name} leaks story knowledge: {found}"
+
+
+def test_professional_agent_prompts_declare_blind_first_time_player() -> None:
+    from llm_agent.pokemon.prompts import SYSTEM_PROMPT as POKEMON_PROMPT
+    from llm_agent.story.prompts import SYSTEM_PROMPT as STORY_PROMPT
+
+    for label, prompt in (("story", STORY_PROMPT), ("pokemon", POKEMON_PROMPT)):
+        lowered = prompt.lower()
+        assert "blind" in lowered or "第一次" in prompt or "first-time" in lowered or "first time" in lowered, label
+        assert "screenshot" in lowered or "屏幕" in prompt or "visible" in lowered, label
+
+
+def test_multi_agent_package_imports_cleanly() -> None:
+    import llm_agent.multi_agent as package
+
+    for name in (
+        "EventBus", "ControlArbiter", "GuardedEmulator", "TaskManager", "TaskScheduler",
+        "SharedWorldMemory", "ProgressMonitor", "RecoveryManager", "BranchCheckpointManager",
+        "AgentRegistry", "AgentContext", "ModelRouter", "GameDirector",
+        "NavigationAdapter", "MultiAgentSession",
+    ):
+        assert getattr(package, name) is not None, name

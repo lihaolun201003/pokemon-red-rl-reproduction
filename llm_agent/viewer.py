@@ -20,7 +20,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -121,8 +121,49 @@ class AgentViewer:
         self._map_photo: Any = None
         self._photo: Any = None
         self._status_vars: dict[str, Any] = {}
+        #: multi-agent status block (worker thread writes, Tk thread renders)
+        self._agent_status: dict[str, Any] = {}
+        self._agent_status_event = threading.Event()
+        self._agent_status_vars: list[Any] = []
         self._pause_button: Any = None
         self._error: str | None = None
+
+    # ------------------------------------------------------------------ #
+    # Multi-agent status panel (additive; unused by the single-agent runtime)
+    # ------------------------------------------------------------------ #
+    def set_agent_status(self, status: Mapping[str, Any] | None) -> None:
+        """Publish a compact multi-agent status dict rendered in the sidebar."""
+        if not isinstance(status, Mapping):
+            return
+        with self._lock:
+            self._agent_status = dict(status)
+        self._agent_status_event.set()
+
+    @staticmethod
+    def _format_agent_status(status: Mapping[str, Any]) -> list[tuple[str, str]]:
+        """Turn the director/session status dict into (label, value) rows."""
+        try:
+            director = status.get("director") or {}
+            navigation = status.get("navigation") or {}
+            api = (status.get("api") or {}).get("total") or {}
+            queue = status.get("task_queue") or []
+            rows = [
+                ("Owner 控制权", str(director.get("owner") or status.get("owner") or "-")),
+                ("Task 当前任务", str(director.get("current_task") or "-")[:46]),
+                ("Queue 队列", f"{len(queue)}  (done {director.get('tasks_completed', 0)} / "
+                               f"failed {director.get('tasks_failed', 0)})"),
+                ("Branch 分支", str(status.get("branch_id") or "-")[-12:]),
+                ("Area 区域", str(navigation.get("area_id") or "-")),
+                ("Battles / Dialogs", f"{director.get('battles', 0)} / {director.get('dialogs', 0)}"),
+                ("Checkpoints", f"{director.get('checkpoints', 0)} (rollbacks {director.get('rollbacks', 0)})"),
+                ("API calls / cost", f"{api.get('calls', 0)} / ${float(api.get('cost_usd', 0.0) or 0.0):.4f}"),
+            ]
+            event = director.get("last_event") or {}
+            if event:
+                rows.append(("Last event", str(event.get("event") or event)[:40]))
+            return rows
+        except Exception:  # noqa: BLE001 - viewer must never crash on status data
+            return [("Multi-Agent", "status unavailable")]
 
     # ------------------------------------------------------------------ #
     # Worker-thread API
@@ -316,6 +357,34 @@ class AgentViewer:
                 wraplength=380,
             ).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
+        # Multi-agent v1 status block (hidden/empty in single-agent mode).
+        try:
+            multi_title = tk.Label(
+                panel,
+                text="多智能体 Multi-Agent",
+                fg="#f0b429",
+                bg="#101418",
+                font=("Segoe UI", 10, "bold"),
+                anchor="w",
+            )
+            multi_title.pack(fill=tk.X, pady=(6, 2))
+            for label in ("Owner", "Task", "Queue", "Branch", "Area / Battle",
+                          "Checkpoints", "API", "Last event"):
+                row = tk.Frame(panel, bg="#101418")
+                row.pack(fill=tk.X, pady=0)
+                tk.Label(
+                    row, text=label, fg="#7f8c99", bg="#101418",
+                    font=("Segoe UI", 8), width=16, anchor="w",
+                ).pack(side=tk.LEFT)
+                value = tk.StringVar(value="-")
+                self._agent_status_vars.append(value)
+                tk.Label(
+                    row, textvariable=value, fg="#e6edf3", bg="#101418",
+                    font=("Segoe UI", 9), anchor="w", justify=tk.LEFT, wraplength=380,
+                ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        except Exception:  # noqa: BLE001 - the panel is optional decoration
+            self._agent_status_vars = []
+
         controls = tk.Frame(panel, bg="#101418", pady=8)
         controls.pack(fill=tk.X, side=tk.BOTTOM)
         self._pause_button = tk.Button(
@@ -431,6 +500,11 @@ class AgentViewer:
             pass
         if map_image is not None:
             self._render_map(map_image)
+        if self._agent_status_event.is_set():
+            self._agent_status_event.clear()
+            with self._lock:
+                agent_status = dict(self._agent_status)
+            self._render_agent_status(agent_status)
         self._animate_waiting()
         self._sync_pause_button()
         if self._shutdown.is_set():
@@ -444,6 +518,18 @@ class AgentViewer:
             self._root.after(self.cfg.refresh_ms, self._poll)
         except Exception:
             self._closed.set()
+
+    def _render_agent_status(self, status: Mapping[str, Any]) -> None:
+        """Update the multi-agent sidebar rows (Tk main thread only)."""
+        if not self._agent_status_vars:
+            return
+        rows = self._format_agent_status(status)
+        for index, variable in enumerate(self._agent_status_vars):
+            label, value = rows[index] if index < len(rows) else ("", "")
+            try:
+                variable.set(value)
+            except Exception:  # noqa: BLE001
+                return
 
     def _render_playback(self) -> None:
         """Advance the real-time action playback (Tk main thread only)."""

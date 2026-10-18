@@ -1,0 +1,96 @@
+{
+  "env_file": ".env",
+  "api": {
+    "base_url": "https://api.deepseek.com",
+    "model": "deepseek-flash",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "thinking": "disabled",
+    "reasoning_effort": "low",
+    "max_tokens": 1200,
+    "image_scale": 4,
+    "image_format": "png",
+    "image_detail": "original"
+  },
+  "multi_agent": {
+    "enabled": true,
+    "director_model": "deepseek-flash",
+    "story_model": "deepseek-flash",
+    "pokemon_model": "deepseek-flash",
+    "max_tokens_agent": 400,
+    "image_scale_agent": 3,
+    "thinking_agent": "disabled",
+    "max_usd_director": 0.6,
+    "max_usd_story": 1.2,
+    "max_usd_pokemon": 1.6,
+    "max_calls_director": 40,
+    "max_calls_story": 90,
+    "max_calls_pokemon": 140,
+    "director_llm_enabled": true,
+    "director_llm_min_interval_s": 90.0,
+    "director_llm_on_stagnation_only": true,
+    "director_llm_max_tokens": 700,
+    "director_max_steps": 500,
+    "navigation_steps_per_task": 120,
+    "dialogue_max_turns": 14,
+    "battle_max_turns": 24,
+    "checkpoint_every_actions": 40,
+    "checkpoint_every_minutes": 8.0,
+    "max_rollbacks_per_branch": 2,
+    "max_rollbacks_total": 4,
+    "max_l2_reviews": 8,
+    "rollback_cooldown_s": 90.0,
+    "max_consecutive_failures": 5,
+    "local_stagnation_steps": 60,
+    "global_stagnation_seconds": 900.0,
+    "repeated_failure_limit": 4,
+    "repeated_message_limit": 3,
+    "no_progress_action_limit": 150,
+    "training_grace_seconds": 300.0,
+    "max_runtime_minutes": 120.0,
+    "max_emulator_actions": 20000,
+    "max_task_queue": 200,
+    "save_screenshots": true,
+    "screenshot_every_decisions": 1,
+    "log_messages": true,
+    "viewer_panel": true,
+    "max_decision_turns": 0
+  },
+  "budget": {
+    "max_usd_per_run": 4.0,
+    "max_usd_total": 12.0,
+    "max_calls_per_run": 1500,
+    "max_calls_per_hour": 240
+  },
+  "emulator": {
+    "window": "null",
+    "press_frames": 8,
+    "action_frames": 24,
+    "max_actions": 0,
+    "live_presentation_while_waiting": false
+  },
+  "navigation": {
+    "enabled": true,
+    "status_in_prompt": true,
+    "persist_on_checkpoint": true
+  },
+  "memory": {
+    "max_context_chars": 5000,
+    "retrieval_limit": 10,
+    "mirror_to_run": true
+  },
+  "guard": {
+    "auto_restore_on_lock": false
+  },
+  "runtime": {
+    "checkpoint_every_actions": 40,
+    "checkpoint_keep": 25,
+    "resume": true,
+    "save_screens": true,
+    "write_report": true
+  },
+  "viewer": {
+    "enabled": false,
+    "scale": 4,
+    "refresh_ms": 16
+  }
+}
