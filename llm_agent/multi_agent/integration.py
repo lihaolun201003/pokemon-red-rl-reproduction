@@ -1360,6 +1360,65 @@ class MultiAgentSession:
                 post(frame.rgba)
             except Exception:  # noqa: BLE001
                 pass
+        self._post_nav_map()
+
+    # -- live navigation map panel (same renderer as the single-agent runtime) --
+    _nav_map_posted_at: float = 0.0
+
+    def _post_nav_map(self) -> None:
+        """Render the live local map into the Tk viewer (throttled, best effort)."""
+        if self.viewer_bridge is None or self.navigation is None:
+            return
+        post = getattr(self.viewer_bridge, "post_map", None)
+        if not callable(post):
+            return
+        now = self._clock()
+        if now - float(getattr(self, "_nav_map_posted_at", 0.0) or 0.0) < 0.25:
+            return
+        self._nav_map_posted_at = now
+        image = self._nav_map_image()
+        if image is None:
+            return
+        try:
+            post(image)
+        except Exception:  # noqa: BLE001 - map panel must never break the run
+            pass
+
+    def _nav_map_image(self) -> Any:
+        """Compose the navigation grid image with ``llm_agent.navigation.viz``."""
+        try:
+            from llm_agent.navigation import viz
+
+            agent = getattr(self.navigation, "agent", None)
+            if agent is None:
+                return None
+            grid = None
+            world = getattr(agent, "world", None)
+            if world is not None:
+                candidate = getattr(world, "current_grid", None)
+                grid = candidate() if callable(candidate) else candidate
+                if grid is None:
+                    record_getter = getattr(world, "current_record", None)
+                    if callable(record_getter):
+                        grid = getattr(record_getter(), "grid", None)
+            if grid is None:
+                return None
+            localizer = getattr(agent, "localizer", None)
+            pose = getattr(localizer, "pose", None)
+            controller = getattr(agent, "controller", None)
+            path = getattr(controller, "last_path", None) if controller is not None else None
+            target = getattr(controller, "last_target", None) if controller is not None else None
+            return viz.render_map_image(
+                grid,
+                pose=pose,
+                path=path,
+                target=target,
+                cell_px=int(self.cfg.navigation.viewer_map_cell_px),
+                max_cells=26,
+                legend=False,
+            )
+        except Exception:  # noqa: BLE001 - best effort
+            return None
 
     def _on_api_attempt(self, record: dict[str, Any]) -> None:
         if self.audit is not None:
@@ -1374,6 +1433,7 @@ class MultiAgentSession:
                 setter(dict(status))
             except Exception:  # noqa: BLE001
                 pass
+        self._post_nav_map()
 
     def _publish_user_event(self, event: Mapping[str, Any]) -> None:
         if self._on_event is None:

@@ -575,8 +575,9 @@ class AgentViewer:
         try:
             image = self._pil_image.fromarray(np.asarray(rgba)[..., :3], mode="RGB")
             target_w = max(160, int(160 * max(1, int(self.cfg.scale))))
-            # Fit inside a fixed panel height so the window layout stays stable.
-            ratio = min(1.0, target_w / max(1, image.width))
+            # Fit inside a fixed panel width; allow a modest nearest-neighbour
+            # upscale so the live map panel is actually readable on screen.
+            ratio = max(1.0, min(2.0, target_w / max(1, image.width)))
             width = max(1, int(image.width * ratio))
             height = max(1, int(image.height * ratio))
             image = image.resize((width, height), self._pil_image.NEAREST)

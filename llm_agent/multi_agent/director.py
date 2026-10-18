@@ -106,6 +106,9 @@ class DirectorConfig:
     max_task_attempts: int = 3
     #: grace before a "no ready task" step is considered a failure
     idle_grace_steps: int = 3
+    #: small real-time pause on idle steps so a stalled run does not burn its
+    #: whole decision budget in a few milliseconds
+    idle_sleep_s: float = 0.10
     stop_file: str = ""
     pause_file: str = ""
 
@@ -304,6 +307,12 @@ class GameDirector:
         self._localization_recoveries = 0
         self._localization_stuck = False
         self._explore_done_areas: dict[str, int] = {}
+        #: anti-pacing bookkeeping: area visit times, door transitions, exhausted areas
+        self._area_visit_at: dict[str, int] = {}
+        self._recent_transitions: list[tuple[str, str, int]] = []
+        self._exhausted_areas: set[str] = set()
+        self._exit_attempted_at: dict[tuple[str, str], int] = {}
+        self._last_observed_area = ""
         self._waiting_tasks: dict[str, str] = {}
         #: message ids already applied to the world state (crash/restart idempotency)
         self._processed_message_ids: set[str] = set()
@@ -427,6 +436,7 @@ class GameDirector:
         self._last_analysis = analysis
         self.frame_index = int(getattr(frame, "frame_index", 0) or 0)
         context = self._context_of(analysis)
+        self._record_area_visit()
         self._maybe_save_screen(frame, analysis)
         if self.step_index % max(1, self.config.status_publish_every_steps) == 0:
             self._publish_status()
@@ -451,6 +461,79 @@ class GameDirector:
         if bool(getattr(analysis, "is_black", False)):
             return CONTEXT_TRANSITION
         return CONTEXT_OVERWORLD
+
+    def _record_area_visit(self) -> None:
+        """Track the navigation area the player is in, detect door ping-pong."""
+        if self.navigation is None:
+            self._last_observed_area = ""
+            return
+        try:
+            area_id = str(self.navigation.status().get("area_id") or "")
+        except Exception:  # noqa: BLE001
+            return
+        if not area_id:
+            return
+        previous = self._last_observed_area
+        self._last_observed_area = area_id
+        self._area_visit_at[area_id] = self.step_index
+        if not previous or previous == area_id:
+            return
+        # The Navigation v2 controller handles map transitions internally, so the
+        # area change is observed here (first frame of the new area) rather than
+        # in _handle_transition.
+        self._recent_transitions.append((previous, area_id, self.step_index))
+        self._recent_transitions = self._recent_transitions[-8:]
+        self._publish(EventType.MAP_TRANSITION, {"area_id": area_id, "frame": self.frame_index})
+        if len(self._recent_transitions) < 2:
+            return
+        (a1, b1, s1), (a2, b2, s2) = self._recent_transitions[-2], self._recent_transitions[-1]
+        if a1 == b2 and b1 == a2 and s2 - s1 <= 10:
+            # A -> B -> A within a few steps: the same door is being walked both
+            # ways, which is the "pacing back and forth" failure.  Remember it so
+            # the exit planner will not immediately re-use these exits.
+            self._exhausted_areas.add(a1)
+            self._exhausted_areas.add(b1)
+            self._log("door_ping_pong_detected", area_a=a1, area_b=b1,
+                      steps=s2 - s1, exhausted=sorted(self._exhausted_areas))
+            self._publish(EventType.STAGNATION_DETECTED,
+                          {"kind": "door_ping_pong", "detail": f"{a1} <-> {b1}"})
+            self._publish(EventType.PROGRESS_DETECTED,
+                          {"kind": "door_ping_pong_suppressed", "detail": f"{a1} <-> {b1}"})
+
+    def _recent_areas(self, *, within_steps: int = 30) -> set[str]:
+        return {
+            area_id for area_id, at in self._area_visit_at.items()
+            if self.step_index - int(at) < within_steps
+        }
+
+    def _nav_connections(self) -> list[Any]:
+        """World-model connections of the real Navigation v2 agent (read-only)."""
+        try:
+            agent = getattr(self.navigation, "agent", None)
+            world = getattr(agent, "world", None) if agent is not None else None
+            connections = getattr(world, "connections", None)
+            return list(connections) if connections is not None else []
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _exit_target_area(self, area_id: str, cell: tuple[int, int] | None) -> str:
+        """Resolve which area an exit cell leads to using recorded connections."""
+        if not area_id or cell is None:
+            return ""
+        for connection in self._nav_connections():
+            try:
+                from_area = str(getattr(connection, "from_area", "") or "")
+                from_cell = getattr(connection, "from_cell", None)
+                to_area = str(getattr(connection, "to_area", "") or "")
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                cell_tuple = (int(from_cell[0]), int(from_cell[1])) if from_cell else None
+            except Exception:  # noqa: BLE001
+                cell_tuple = None
+            if from_area == area_id and cell_tuple == cell and to_area:
+                return to_area
+        return ""
 
     def _maybe_save_screen(self, frame: Frame, analysis: ScreenAnalysis) -> None:
         if not self.config.save_screenshots or self.run_dir is None:
@@ -712,6 +795,11 @@ class GameDirector:
         if task is None:
             self._maybe_story_proposals(frame)
             self.stats["idle_steps"] += 1
+            try:
+                if float(self.config.idle_sleep_s) > 0:
+                    time.sleep(float(self.config.idle_sleep_s))
+            except Exception:  # noqa: BLE001
+                pass
             return self._step(CONTEXT_IDLE, "idle", "no schedulable task; awaiting event or proposal")
         self.scheduler.on_selected(task)
         owner = task.owner_agent
@@ -808,10 +896,25 @@ class GameDirector:
             self._pause_task(task, f"navigation event: {status}")
             self.monitor.mark_activity("event", f"navigation {status}")
         else:
+            error_text = str(report.get("error") or report.get("reason") or status)
+            # A stale/estimated pose after the area finished can make every known
+            # exit look unreachable; re-localize from the real screen and retry
+            # instead of failing the task and idling forever.
+            unreachable = any(marker in error_text.lower() for marker in
+                              ("not reachable", "no path", "unreachable"))
+            if unreachable and self.navigation is not None and hasattr(self.navigation, "recover_localization"):
+                recovery = self._try_localization_recovery()
+                if recovery.get("ok"):
+                    self._pause_task(task, f"pose drift: {error_text[:120]}")
+                    return self._step(
+                        CONTEXT_OVERWORLD, "navigation_relocalized",
+                        f"recovered pose after: {error_text[:100]}",
+                        owner=AgentRole.NAVIGATION.value, task_id=task.task_id,
+                    )
             self._publish(EventType.NAVIGATION_FAILED, {
-                "reason": str(report.get("error") or status), "task_id": task.task_id,
+                "reason": error_text, "task_id": task.task_id,
             })
-            self._retry_or_fail(task, str(report.get("error") or status))
+            self._retry_or_fail(task, error_text)
         return self._step(
             CONTEXT_OVERWORLD,
             "navigation_task",
@@ -1092,32 +1195,60 @@ class GameDirector:
             coverage = float(nav_status.get("coverage_ratio") or 0.0)
             frontier = int(nav_status.get("unknown_frontier") or 0)
         # A fully explored area must NOT spawn an endless stream of instant
-        # "explore completed" tasks: switch once to crossing the area (known
-        # exit) and then stay idle long enough for the story agent to propose new
-        # objectives instead of re-running the same finished exploration.
+        # "explore completed" tasks, and it must NOT pace through the same door
+        # forever: try each exit at most once in a while, skip exits that lead to
+        # recently visited areas, and if every exit is a known dead end mark the
+        # area exhausted (idle instead of walking back and forth).
+        if area_id and area_id in self._exhausted_areas:
+            return None
         already_done = area_id in self._explore_done_areas
         done_recently = (
-            already_done and self.step_index - self._explore_done_areas[area_id] < 20
+            already_done and self.step_index - self._explore_done_areas[area_id] < 40
         )
         area_finished = already_done or (coverage >= 0.95 and frontier <= 6)
         if area_id and area_finished:
             if done_recently:
                 return None
             self._explore_done_areas[area_id] = self.step_index
+            recent_areas = self._recent_areas(within_steps=40)
             trigger: dict[str, Any] = {"kind": "exit"}
             exit_cell: tuple[int, int] | None = None
             if self.navigation is not None and hasattr(self.navigation, "local_map"):
                 try:
                     local = self.navigation.local_map(radius=40) or {}
-                    exits = [cell for cell in (local.get("cells") or [])
-                             if str(cell.get("state")) == "exit"
-                             and cell.get("x") is not None and cell.get("y") is not None]
                     pose = (self.navigation.status().get("pose") or {})
                     px, py = int(pose.get("x") or 0), int(pose.get("y") or 0)
-                    if exits:
-                        exits.sort(key=lambda cell: abs(int(cell["x"]) - px) + abs(int(cell["y"]) - py))
-                        exit_cell = (int(exits[0]["x"]), int(exits[0]["y"]))
-                        trigger = {"kind": "cell", "x": exit_cell[0], "y": exit_cell[1]}
+                    candidates: list[tuple[int, int, str]] = []
+                    for cell in (local.get("cells") or []):
+                        if str(cell.get("state")) != "exit":
+                            continue
+                        if cell.get("x") is None or cell.get("y") is None:
+                            continue
+                        cx, cy = int(cell["x"]), int(cell["y"])
+                        target_area = self._exit_target_area(area_id, (cx, cy))
+                        candidates.append((cx, cy, target_area))
+                    # unknown destination (likely a new area) first, then non-recent
+                    candidates.sort(key=lambda item: (
+                        0 if not item[2] else (1 if item[2] not in recent_areas else 2),
+                        abs(item[0] - px) + abs(item[1] - py),
+                    ))
+                    useful: list[tuple[int, int, str]] = []
+                    for cx, cy, target_area in candidates:
+                        used_at = self._exit_attempted_at.get((area_id, f"{cx},{cy}"))
+                        if used_at is not None and self.step_index - used_at < 40:
+                            continue
+                        if target_area and target_area in recent_areas:
+                            continue
+                        useful.append((cx, cy, target_area))
+                    if not useful:
+                        self._exhausted_areas.add(area_id)
+                        self._log("area_exhausted", area_id=area_id,
+                                  exits=len(candidates), recent=sorted(recent_areas))
+                        return None
+                    cx, cy, _target_area = useful[0]
+                    exit_cell = (cx, cy)
+                    trigger = {"kind": "cell", "x": cx, "y": cy}
+                    self._exit_attempted_at[(area_id, f"{cx},{cy}")] = self.step_index
                 except Exception:  # noqa: BLE001 - fall back to the exit landmark
                     exit_cell = None
             description = (
