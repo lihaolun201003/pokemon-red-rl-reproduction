@@ -1,64 +1,62 @@
-from setuptools import setup, find_packages
-import os
-import sys
-sys.path.insert(0, os.getcwd())
-import neroRL
+"""Packaging metadata for the Pokémon Red autonomous LLM agent.
 
-# Get current working directory
-cwd = os.getcwd()
+The import package is :mod:`llm_agent` (Vision-based Navigation, Story and
+Pokémon agents driven by a Game Director on top of PyBoy).  The earlier PPO
+training pipeline is archived on the ``archive/ppo-reproduction`` branch and is
+not part of this distribution.
+"""
 
-# Get install requirements from requirements.txt
-install_requires = None
-with open(cwd + "/requirements-phase1.txt") as file:
-    install_requires = [module_name.rstrip() for module_name in file.readlines()]
+from pathlib import Path
 
-# Get long description from README.md
-long_description = ""
-with open(cwd + "/README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
+from setuptools import find_packages, setup
 
-# Set up package
+ROOT = Path(__file__).resolve().parent
+
+
+def _read(name: str) -> str:
+    return (ROOT / name).read_text(encoding="utf-8")
+
+
+def _requirements() -> list[str]:
+    lines = []
+    for raw in _read("requirements.txt").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line:
+            lines.append(line)
+    return lines
+
+
 setup(
-    name="neroRL",
-    version=neroRL.__version__,
-    description="A library for Deep Reinforcement Learning (PPO) in PyTorch",
-    long_description=long_description,
+    name="pokemon-red-autonomous-agent",
+    version="1.0.0",
+    description=(
+        "Vision-based autonomous exploration and multi-agent decision-making on "
+        "real Pokémon Red (PyBoy emulator + DeepSeek vision LLM)."
+    ),
+    long_description=_read("README.md"),
     long_description_content_type="text/markdown",
-    url="https://github.com/MarcoMeter/neroRL",
-    keywords = ["Deep Reinforcement Learning", "PyTorch", "Proximal Policy Optimization", "PPO", "Recurrent", "Recurrence", "LSTM", "GRU"],
+    url="https://github.com/lihaolun201003/pokemon-red-rl-reproduction",
     project_urls={
-        "Github": "https://github.com/MarcoMeter/neroRL",
-        "Bug Tracker": "https://github.com/MarcoMeter/neroRL/issues"
+        "Github": "https://github.com/lihaolun201003/pokemon-red-rl-reproduction",
+        "Reports": "https://github.com/lihaolun201003/pokemon-red-rl-reproduction/tree/main/docs/reports",
     },
+    author="lihaolun201003",
+    license="MIT",
+    keywords=[
+        "Pokemon Red", "PyBoy", "Game Boy", "LLM agent", "vision", "autonomous exploration",
+        "multi-agent", "navigation", "DeepSeek",
+    ],
     classifiers=[
         "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.10",
         "License :: OSI Approved :: MIT License",
-        "Operating System :: OS Independent",
+        "Operating System :: Microsoft :: Windows",
+        "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
-    author="Marco Pleines",
-    package_dir={'': '.'},
-    packages=find_packages(where='.', include="neroRL*"),
+    python_requires=">=3.10",
+    packages=find_packages(include=["llm_agent", "llm_agent.*"]),
+    package_data={"llm_agent": ["navigation/NAV_CONTRACT.md", "memory/README.md"]},
     include_package_data=True,
-    install_requires=install_requires,
-    extras_require={
-        ':sys_platform == "win32"': [ # Extra windows install requirements
-            'windows-curses'
-        ],
-        ':"linux" in sys_platform': [ # Extra linux install requirements
-            ''  
-        ],
-        "procgen":          ["gym==0.15.3", "procgen"],
-        "obstacle-tower":   ["mlagents-envs==0.17.0", "protobuf==3.20.3"],
-        "ml-agents":        ["gym==0.18.3", "mlagents-envs==0.28.0"],
-    },
-    entry_points={
-        "console_scripts": [
-            "ntrain=neroRL.train:main",
-            "nenjoy=neroRL.enjoy:main",
-            "neval=neroRL.eval:main",
-            "ntune=neroRL.tune:main",
-            "noptuna=neroRL.optuna:main",
-            "neval-checkpoints=neroRL.eval_checkpoints:main"
-        ],
-    },
+    install_requires=_requirements(),
+    extras_require={"dev": ["pytest>=7.4"]},
 )

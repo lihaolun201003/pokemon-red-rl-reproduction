@@ -16,8 +16,9 @@
 - NPC 对话理解、剧情推进（Story Agent 后续实现，接口见 §11）。
 - 道馆挑战与任务攻略。
 - 宝可梦战斗策略（导航遇到战斗会暂停并返回结构化事件，交给上层）。
-- PPO 重新训练；`neroRL/`、`reproduction/`、`scripts/train.py`、checkpoint 等训练系统
-  完全未改动，原有测试保持通过。
+- PPO 训练系统（当时的 `neroRL/`、`reproduction/`、`scripts/train.py`、checkpoint 等）
+  完全未改动，原有测试保持通过；该训练系统现已在仓库清理中移出 `main`，完整保留在
+  `archive/ppo-reproduction` 分支。
 - 完整游戏通关逻辑。
 
 ### 1.3 硬性规则（贯穿全部实现）

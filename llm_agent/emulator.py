@@ -17,8 +17,10 @@ Design rules (see ``ARCHITECTURE.md`` §5):
   so the runtime can decide whether to retry, restore a checkpoint or stop.
 
 Each button action advances exactly ``EmulatorConfig.action_frames`` game frames
-(the RL baseline used ``press_frames=8`` held out of ``action_frames=24``),
-reproducing ``neroRL``'s validated ``run_action_on_emulator`` timing::
+(``press_frames=8`` held out of ``action_frames=24``).  This is the same
+action-timing convention that the archived PPO baseline validated (see the
+``archive/ppo-reproduction`` branch), expressed here as a self-contained
+wrapper::
 
     press button
     tick(press_frames, render=True)          # button held

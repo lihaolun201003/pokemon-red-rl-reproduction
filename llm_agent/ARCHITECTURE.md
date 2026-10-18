@@ -6,13 +6,15 @@ change is genuinely required, message the Lead instead of editing another owner'
 files.
 
 Project root: `C:\Users\lihao\Desktop\pokemon-red-rl-reproduction`
-Python: `.venv\Scripts\python.exe` (3.10.11).  PyBoy 2.4.0, numpy, Pillow, OpenCV,
-torch, tkinter are available. **Do not install new packages** and do not use
+Python: `.venv\Scripts\python.exe` (3.10.11). PyBoy 2.4.0, numpy, Pillow and tkinter
+are the runtime dependencies. **Do not install new packages** and do not use
 `requests`/`httpx`/`openai`/`python-dotenv`/`pyyaml` — implement with the stdlib.
 
-The PPO pipeline (`neroRL/`, `reproduction/`, `scripts/train.py`, checkpoints,
-reports) must stay untouched.  New work lives only in `llm_agent/`, `scripts/run_llm_agent.py`,
-`scripts/llm_agent_api_probe.py`, `tests/llm_agent/` and the docs listed below.
+The earlier PPO pipeline (`neroRL/`, `reproduction/`, `scripts/train.py`,
+checkpoints, reports) is archived on the `archive/ppo-reproduction` Git branch and
+is no longer part of `main`. Current work lives only in `llm_agent/`,
+`llm_agent/navigation/`, `llm_agent/multi_agent/`, `llm_agent/story/`,
+`llm_agent/pokemon/`, the agent scripts under `scripts/`, and their tests.
 
 ---
 
@@ -60,7 +62,7 @@ Hard rules for everything in `llm_agent/` except `progress.py`:
   The DMG palette is exactly 4 grey levels: 0, 85, 153, 255 (RGBA).
   PyBoy is **not thread-safe**: only the agent-loop thread may touch it.  The
   Lead's viewer only receives already-copied frames.
-* Baseline PPO environment used `press 8 frames + release, 24 frames per
+* The archived PPO baseline used `press 8 frames + release, 24 frames per
   action`; the LLM agent reuses `press_frames=8, action_frames=24` as defaults.
 * DeepSeek API (official docs, 2026-10): OpenAI-compatible
   `POST {base_url}/chat/completions`; model `deepseek-flash` (V4.1 Flash) has

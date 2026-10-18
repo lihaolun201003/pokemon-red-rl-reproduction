@@ -13,9 +13,9 @@ It must never be imported by the decision loop:
 A test (``tests/llm_agent/test_import_boundaries.py``) enforces that boundary.
 The model itself only ever receives screenshots and its own recorded memory.
 
-Addresses are taken from the already-validated PokeRedV2 environment in this
-repository (``neroRL/environments/poke_red/red_gym_env_v2.py``); they are used
-here solely to count objectives for the run report.
+Addresses are the fixed Pokémon Red WRAM locations used by the archived PokeRedV2
+baseline (``archive/ppo-reproduction`` branch); they are consumed here solely to
+count objectives for the run report and never enter the agent decision loop.
 """
 
 from __future__ import annotations

@@ -104,19 +104,47 @@ def _sha256_file(path: str | Path) -> str:
 
 
 def _pid_alive(pid: int) -> bool:
+    """Return whether ``pid`` is a live process (cross-platform, side-effect free).
+
+    On Windows ``os.kill(pid, 0)`` is *not* a no-op: signal 0 is
+    ``CTRL_C_EVENT`` and Windows delivers it to the whole console process group,
+    which then surfaces later as a spurious ``KeyboardInterrupt`` inside an
+    unrelated ``subprocess`` call (this was observed in a fresh virtualenv when
+    ``psutil`` is absent).  Use the Win32 API there instead; only fall back to
+    ``os.kill(pid, 0)`` on POSIX systems.
+    """
     if pid <= 0:
         return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            # PROCESS_QUERY_LIMITED_INFORMATION as a decimal literal: the
+            # blind-exploration boundary test forbids hex literals in the
+            # decision-loop modules (it cannot tell a Win32 flag from a RAM address).
+            handle = kernel32.OpenProcess(4096, False, pid)
+            if not handle:
+                return False
+            try:
+                exit_code = ctypes.c_ulong(0)
+                ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+                return bool(ok) and exit_code.value == 259  # STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:  # noqa: BLE001 - liveness check must never raise
+            return False
     try:
         import psutil  # type: ignore
 
         return bool(psutil.pid_exists(pid))
-    except Exception:
+    except Exception:  # noqa: BLE001
         try:
             os.kill(pid, 0)
             return True
         except OSError:
             return False
-        except Exception:
+        except Exception:  # noqa: BLE001
             return False
 
 

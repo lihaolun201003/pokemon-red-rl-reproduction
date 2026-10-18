@@ -1,13 +1,18 @@
-recursive-include . *.md
-recursive-include . *.yaml
-recursive-include . *.txt
-recursive-include . *.html
+include README.md
 include LICENSE
 include NOTICE.md
-include UPSTREAM.json
+include CITATION.cff
+include requirements.txt
+include requirements-dev.txt
+include pytest.ini
+include .env.example
+recursive-include llm_agent *.md
+recursive-include configs *.json
+recursive-include docs *.md
 prune .venv
 prune local
 prune artifacts
 prune work
 prune session
+prune .pytest_cache
 global-exclude *.gb *.gbc *.gba *.rom *.state *.sav *.pt *.pth *.ckpt .env .env.*

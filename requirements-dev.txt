@@ -1,0 +1,5 @@
+# Development / test dependencies (runtime dependencies included).
+-r requirements.txt
+# pytest 8.x is the verified range (pytest 9 changes Windows console/signal
+# handling around subprocesses and is not needed for this project).
+pytest>=7.4,<9

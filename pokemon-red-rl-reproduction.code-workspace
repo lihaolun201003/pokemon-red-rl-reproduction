@@ -3,6 +3,12 @@
   "settings": {
     "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
     "python.testing.pytestEnabled": true,
-    "python.testing.pytestArgs": ["tests/phase1"]
+    "python.testing.pytestArgs": [
+      "tests/llm_agent",
+      "tests/navigation",
+      "tests/multi_agent",
+      "tests/story",
+      "tests/pokemon"
+    ]
   }
 }

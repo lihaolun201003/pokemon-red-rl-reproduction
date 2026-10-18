@@ -346,7 +346,6 @@ def run_g0(ev: Evidence) -> dict[str, Any]:
     commands = [
         ("navigation_v2_tests", [sys.executable, "-m", "pytest", "tests/navigation", "-q"]),
         ("llm_agent_tests", [sys.executable, "-m", "pytest", "tests/llm_agent", "-q"]),
-        ("phase1_tests", [sys.executable, "-m", "pytest", "tests/phase1", "-q"]),
         ("multi_agent_tests", [sys.executable, "-m", "pytest", "tests/multi_agent", "-q"]),
         ("story_tests", [sys.executable, "-m", "pytest", "tests/story", "-q"]),
         ("pokemon_tests", [sys.executable, "-m", "pytest", "tests/pokemon", "-q"]),

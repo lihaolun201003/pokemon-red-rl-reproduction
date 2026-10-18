@@ -1,20 +1,13 @@
-UnitySDK.log
-__pycache__
-.DS_STORE
-/UnityBuilds/
-logs
-.vscode/settings.json
-/summaries/
-/checkpoints/
-csharp_timers.json
-.vs/
-.vscode/.ropeproject/config.py
-.vscode/.ropeproject/objectdb
+# OS / editor noise
+__pycache__/
+*.py[cod]
+.DS_Store
 .vscode/
-*.egg-info*
-test.py
-neroRL/test.py
-# Reproduction: local-only inputs and generated data
+.vs/
+*.egg-info/
+.pytest_cache/
+
+# Local-only game data (NEVER commit a ROM, save state or recording)
 .venv/
 local/
 artifacts/
@@ -32,11 +25,13 @@ work/
 *.mp4
 *.avi
 *.log
+【原版】*
+
+# Secrets: the API key lives in .env only (see .env.example)
 .env
 .env.*
 # keep the checked-in configuration example (contains no secrets)
 !.env.example
-.pytest_cache/
 
 # DeepSeek LLM agent runtime data (gameplay memory is local-only)
 llm_agent/memory/*
