@@ -30,7 +30,7 @@ import time
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from llm_agent import __version__, contracts, observation
 from llm_agent.agent import Brain, PreparedDecision
@@ -53,7 +53,6 @@ from llm_agent.contracts import (
 from llm_agent.emulator import GameBoyEmulator
 from llm_agent.guard import LoopGuard
 from llm_agent.memory import AgentMemory
-from llm_agent.mental_map import MentalMap
 from llm_agent.tools import ToolExecutor
 from llm_agent.viewer import AgentViewer, ViewerStatus
 
@@ -495,7 +494,13 @@ class AgentRuntime:
         self.checkpoints: CheckpointStore | None = None
         self.lock: SingleInstanceLock | None = None
         self.client: DeepSeekClient | None = None
-        self.mental_map = MentalMap()
+        #: Navigation v2 subsystem (visual localization + permanent map memory).
+        #: It owns low-level movement; the DeepSeek brain only picks goals.
+        self.navigation: Any | None = None
+        self._nav_last_status: dict[str, Any] = {}
+        self._nav_frames_presented = 0
+        self._nav_screens_saved = 0
+        self._nav_last_report: dict[str, Any] | None = None
 
         self._run_dir: Path | None = None
         self._turn = 0
@@ -639,6 +644,12 @@ class AgentRuntime:
             self._previous_frame = self._last_frame
             self.audit.log("events", {"event": "fresh_start", "state": cfg.emulator.state})
 
+        # navigation v2 -------------------------------------------------- #
+        # Visual localization + permanent grid/world maps.  It is created before
+        # the tool layer so raw movement tools can keep the map in sync, and it
+        # survives checkpoint restores via attach()/re-localization.
+        self.navigation = self._build_navigation(run_dir)
+
         # tools --------------------------------------------------------- #
         self.executor = ToolExecutor(
             emulator=self.emulator,
@@ -649,6 +660,8 @@ class AgentRuntime:
             restore_progress=self._tool_restore_progress,
             screen_writer=self._save_screen,
             cfg=cfg,
+            navigator=self.navigation,
+            on_action_outcome=self._on_action_outcome,
         )
 
         # real-time viewer presentation: stream every emulated frame at 60 fps --- #
@@ -663,14 +676,8 @@ class AgentRuntime:
                 self._log_event("frame_streaming_failed", error=f"{type(exc).__name__}: {exc}")
 
         # self-recorded mental map (dead reckoning from our own moves only) ---- #
-        if cfg.runtime.resume:
-            try:
-                map_path = run_dir / "mental_map.json"
-                if map_path.is_file():
-                    self.mental_map.restore(json.loads(map_path.read_text(encoding="utf-8")))
-                    self._log_event("mental_map_restored", **self.mental_map.summary())
-            except Exception as exc:  # noqa: BLE001
-                self._log_event("mental_map_restore_failed", error=f"{type(exc).__name__}: {exc}")
+        # The navigation subsystem loads its own permanent world model in
+        # _build_navigation(); nothing else to restore here.
 
         # API client + warmup ------------------------------------------ #
         if self.real_api:
@@ -740,6 +747,10 @@ class AgentRuntime:
 
         # final checkpoint (best effort)
         if self.emulator is not None and status != "starting":
+            try:
+                self._save_navigation(force=True)
+            except Exception as exc:  # noqa: BLE001
+                self._log_event("navigation_final_save_failed", error=f"{type(exc).__name__}: {exc}")
             try:
                 self._save_checkpoint(f"final:{status}")
             except Exception as exc:  # noqa: BLE001
@@ -879,7 +890,8 @@ class AgentRuntime:
                     last_outcome_text=self._last_outcome_text,
                     trigger=trigger,
                     previous_frame=self._previous_frame,
-                    mental_map_text=self.mental_map.render_context(),
+                    mental_map_text="",
+                    nav_status_text=self._nav_prompt_text(),
                 )
             except Exception as exc:  # noqa: BLE001
                 raise BlockedError(f"failed to build DeepSeek request: {type(exc).__name__}: {exc}") from exc
@@ -1163,17 +1175,10 @@ class AgentRuntime:
             self._last_outcome_text = outcome.summary
             steps = getattr(outcome, "steps", []) or []
             self._record_video(steps)
-            last_analysis = getattr(self.executor, "last_analysis", None)
-            final_event = getattr(last_analysis, "event", None)
-            batch_events = set(getattr(outcome, "events", []) or [])
-            area_changed = bool(
-                batch_events & {contracts.ScreenEvent.MAP_CHANGE, contracts.ScreenEvent.TRANSITION}
-            )
-            try:
-                self.mental_map.update(steps, final_event=final_event, area_changed=area_changed)
-                self._save_mental_map()
-            except Exception as exc:  # noqa: BLE001
-                self._log_event("mental_map_update_failed", error=f"{type(exc).__name__}: {exc}")
+            # The navigation subsystem already received this exact outcome once,
+            # through ToolExecutor.on_action_outcome (no double counting here).
+        self._refresh_nav_status()
+        self._save_navigation()
         last_frame = getattr(self.executor, "last_frame", None)
         last_analysis = getattr(self.executor, "last_analysis", None)
         if last_frame is not None and last_analysis is not None:
@@ -1416,11 +1421,9 @@ class AgentRuntime:
                     self.memory.restore(snapshot)
                     self.memory.save()
                     self._log_event("memory_restored_to_checkpoint", checkpoint=meta.id)
-                map_snapshot = (payload.get("runtime_snapshot") or {}).get("mental_map")
-                if map_snapshot:
-                    self.mental_map.restore(map_snapshot)
-                    self._log_event("mental_map_restored_to_checkpoint", checkpoint=meta.id,
-                                    **self.mental_map.summary())
+                nav_snapshot = (payload.get("runtime_snapshot") or {}).get("navigation")
+                if nav_snapshot:
+                    self._restore_navigation_snapshot(nav_snapshot)
             except Exception as exc:  # noqa: BLE001
                 self._log_event("memory_restore_failed", error=f"{type(exc).__name__}: {exc}")
         self._last_frame = self._emulator_observe()
@@ -1454,8 +1457,12 @@ class AgentRuntime:
                 budget_snapshot = {}
         runtime_snapshot = self.state.to_dict()
         try:
-            runtime_snapshot["mental_map"] = self.mental_map.snapshot()
-        except Exception:
+            if self.cfg.navigation.persist_on_checkpoint:
+                self._save_navigation(force=True)
+            nav_snapshot = self._navigation_snapshot()
+            if nav_snapshot:
+                runtime_snapshot["navigation"] = nav_snapshot
+        except Exception:  # noqa: BLE001
             pass
         meta = self.checkpoints.save(
             state_bytes=state_bytes,
@@ -1497,6 +1504,230 @@ class AgentRuntime:
         )
 
     # ------------------------------------------------------------------ #
+    # Navigation v2 integration
+    # ------------------------------------------------------------------ #
+    def _build_navigation(self, run_dir: Path) -> Any | None:
+        """Create the visual navigation subsystem (None when disabled/unavailable)."""
+        if not self.cfg.navigation.enabled:
+            self._log_event("navigation_disabled")
+            return None
+        if self.emulator is None:
+            return None
+        try:
+            from llm_agent.navigation.navigation_agent import NavigationAgent
+        except Exception as exc:  # noqa: BLE001 - navigate feature must not break legacy runs
+            self._log_event("navigation_import_failed", error=f"{type(exc).__name__}: {exc}")
+            print(
+                f"[warn] navigation subsystem unavailable ({type(exc).__name__}: {exc}); "
+                "falling back to raw movement tools",
+                file=sys.stderr,
+                flush=True,
+            )
+            return None
+        world_root = self.cfg.navigation.world_root or str(run_dir / "navigation")
+        try:
+            agent = NavigationAgent(
+                emulator=self.emulator,
+                world_root=world_root,
+                config=self.cfg,
+                on_frame=self._on_nav_frame,
+                on_step=self._on_nav_step,
+                on_status=self._on_nav_status,
+            )
+            attach = getattr(agent, "attach", None)
+            if callable(attach):
+                attach()
+            self._nav_last_status = dict(getattr(agent, "status", lambda: {})() or {})
+            self._log_event(
+                "navigation_ready",
+                world_root=world_root,
+                **{key: self._nav_last_status.get(key) for key in ("area_id", "areas_total")},
+            )
+            return agent
+        except Exception as exc:  # noqa: BLE001 - never block the run on navigation setup
+            self._log_event("navigation_setup_failed", error=f"{type(exc).__name__}: {exc}")
+            self._safe_record_error("navigation setup", exc)
+            return None
+
+    def _on_nav_frame(self, frame: Frame) -> None:
+        """Called by the navigation controller for every executed navigation step."""
+        if not isinstance(frame, Frame):
+            return
+        self._last_frame = frame
+        self._nav_frames_presented += 1
+        try:
+            self.state.frame_index = self._absolute_frame(int(frame.frame_index))
+            self.state.touch()
+        except Exception:  # noqa: BLE001
+            pass
+        if self.viewer is not None:
+            try:
+                self.viewer.post_frame(frame.rgba)
+            except Exception:  # noqa: BLE001 - presentation only
+                pass
+        # Keep periodic visual evidence of autonomous navigation (not every step).
+        if (
+            self.cfg.runtime.save_screens
+            and self._nav_frames_presented % max(1, int(self.cfg.runtime.screenshot_every_batches)) == 0
+            and self._nav_frames_presented % 5 == 0
+        ):
+            self._save_screen(frame)
+            self._nav_screens_saved += 1
+
+    def _on_nav_step(self, step: Any) -> None:
+        """Audit hook: one verified navigation step (never raises into navigation)."""
+        if self.audit is None:
+            return
+        try:
+            payload = step.to_dict() if hasattr(step, "to_dict") else {"step": str(step)}
+            self.audit.log("navigation", payload)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_nav_status(self, status: Any) -> None:
+        """Status hook: navigation publishes live progress (viewer / prompt cache)."""
+        if isinstance(status, Mapping):
+            self._nav_last_status = dict(status)
+        if self.viewer is not None:
+            try:
+                self._publish(None, force=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _on_action_outcome(self, outcome: Any) -> None:
+        """Exactly-once sync of raw movement tool results into the permanent map.
+
+        Called by :class:`~llm_agent.tools.ToolExecutor` whenever the model used a
+        legacy raw movement tool (press/execute_actions/walk).  Navigation tools
+        update the map themselves and do NOT pass through here.
+        """
+        if self.navigation is None:
+            return
+        function = getattr(self.navigation, "observe_external_outcome", None)
+        if not callable(function):
+            return
+        try:
+            function(outcome)
+            self._refresh_nav_status()
+        except Exception as exc:  # noqa: BLE001
+            self._log_event("navigation_sync_failed", error=f"{type(exc).__name__}: {exc}")
+
+    def _refresh_nav_status(self) -> None:
+        if self.navigation is None:
+            return
+        function = getattr(self.navigation, "status", None)
+        if not callable(function):
+            return
+        try:
+            status = function()
+            if isinstance(status, Mapping):
+                self._nav_last_status = dict(status)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _navigation_summary(self) -> dict[str, Any]:
+        """Compact navigation status for prompt/viewer/metrics/report."""
+        summary = dict(self._nav_last_status or {})
+        if not summary and self.navigation is not None:
+            self._refresh_nav_status()
+            summary = dict(self._nav_last_status or {})
+        if not summary:
+            return {}
+        summary.setdefault("area_id", "")
+        summary.setdefault("areas_total", 0)
+        if self.executor is not None:
+            report = getattr(self.executor, "last_nav_report", None)
+            if report:
+                summary["last_report_status"] = report.get("status")
+                summary["last_report_reason"] = _clip(str(report.get("reason") or ""), 300)
+        return summary
+
+    def _nav_prompt_text(self) -> str:
+        """Navigation status + ASCII map block injected into the decision prompt."""
+        cfg = self.cfg
+        if self.navigation is None or not cfg.navigation.status_in_prompt:
+            return ""
+        summary = self._navigation_summary()
+        if not summary:
+            return ""
+        try:
+            from llm_agent.tools import _nav_status_summary
+
+            text = _nav_status_summary(summary)
+        except Exception:  # noqa: BLE001
+            text = ""
+        try:
+            payload = self.navigation.local_map(radius=int(cfg.navigation.prompt_map_radius))
+            ascii_map = str((payload or {}).get("ascii") or "")
+            if ascii_map:
+                text = (text + "\n\n" + ascii_map).strip()
+        except Exception:  # noqa: BLE001 - a map rendering bug must not break prompts
+            pass
+        limit = int(cfg.navigation.prompt_map_max_chars)
+        if len(text) > limit:
+            text = text[: max(0, limit - 1)] + "…"
+        return text
+
+    def _post_nav_map(self) -> None:
+        """Render the live local map panel for the Tk viewer (throttled, best effort)."""
+        if self.viewer is None or self.navigation is None:
+            return
+        post = getattr(self.viewer, "post_map", None)
+        if not callable(post):
+            return
+        now = _now()
+        if now - getattr(self, "_nav_map_posted_at", 0.0) < 0.25:
+            return
+        self._nav_map_posted_at = now
+        image = self._nav_map_image()
+        if image is None:
+            return
+        try:
+            post(image)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _nav_map_image(self) -> Any | None:
+        """Render the live local map with navigation.viz (best effort, cheap)."""
+        try:
+            from llm_agent.navigation import viz
+
+            agent = self.navigation
+            if agent is None:
+                return None
+            grid = None
+            world = getattr(agent, "world", None)
+            if world is not None:
+                candidate = getattr(world, "current_grid", None)
+                grid = candidate() if callable(candidate) else candidate
+                if grid is None:
+                    record_getter = getattr(world, "current_record", None)
+                    if callable(record_getter):
+                        record = record_getter()
+                        grid = getattr(record, "grid", None)
+            if grid is None:
+                return None
+            localizer = getattr(agent, "localizer", None)
+            pose = getattr(localizer, "pose", None)
+            controller = getattr(agent, "controller", None)
+            path = None
+            target = None
+            if controller is not None:
+                path = getattr(controller, "last_path", None)
+                target = getattr(controller, "last_target", None)
+            return viz.render_map_image(
+                grid,
+                pose=pose,
+                path=path,
+                target=target,
+                cell_px=int(self.cfg.navigation.viewer_map_cell_px),
+                max_cells=26,
+                legend=False,
+            )
+        except Exception:  # noqa: BLE001 - map panel must never break a run
+            return None
+
+    # ------------------------------------------------------------------ #
     # Screenshots / video
     # ------------------------------------------------------------------ #
     def _save_screen(self, frame: Frame) -> str:
@@ -1511,14 +1742,56 @@ class AgentRuntime:
         except Exception:
             return ""
 
-    def _save_mental_map(self) -> None:
-        """Persist the self-recorded mental map next to the run artifacts."""
-        if self._run_dir is None:
+    def _save_navigation(self, *, force: bool = False) -> None:
+        """Persist the permanent navigation world model (throttled, best effort)."""
+        if self.navigation is None:
             return
+        now = _now()
+        if not force and now - float(getattr(self, "_nav_last_save_at", 0.0) or 0.0) < 2.0:
+            return
+        self._nav_last_save_at = now
         try:
-            write_json_atomic(self._run_dir / "mental_map.json", self.mental_map.snapshot())
-        except Exception:
-            pass
+            self.navigation.save()
+        except Exception as exc:  # noqa: BLE001
+            self._log_event("navigation_save_failed", error=f"{type(exc).__name__}: {exc}")
+
+    def _navigation_snapshot(self) -> dict[str, Any]:
+        """Serializable navigation state hint for checkpoints.
+
+        The permanent world model is persisted separately under
+        ``<run_dir>/navigation``; a checkpoint only stores the *pose hint*, and a
+        restore always re-localizes visually (``attach``) before trusting it.
+        """
+        if self.navigation is None:
+            return {}
+        summary = self._navigation_summary()
+        if not summary:
+            return {}
+        return {
+            "area_id": summary.get("area_id", ""),
+            "pose": summary.get("pose"),
+            "areas_total": summary.get("areas_total", 0),
+            "form": "pose-hint",
+        }
+
+    def _restore_navigation_snapshot(self, snapshot: dict[str, Any]) -> None:
+        if self.navigation is None or not isinstance(snapshot, dict):
+            return
+        # Relocalize against the persisted world model after the emulator state
+        # was restored; never blindly trust a stored coordinate (the map may be
+        # newer than the checkpoint).
+        function = getattr(self.navigation, "restore_snapshot", None)
+        try:
+            if callable(function):
+                function(snapshot)
+            else:
+                attach = getattr(self.navigation, "attach", None)
+                if callable(attach):
+                    attach()
+            self._refresh_nav_status()
+            self._log_event("navigation_restored_to_checkpoint", **self._navigation_summary())
+        except Exception as exc:  # noqa: BLE001
+            self._log_event("navigation_restore_failed", error=f"{type(exc).__name__}: {exc}")
 
     def _prune_screens(self) -> None:
         if self._run_dir is None:
@@ -1660,6 +1933,25 @@ class AgentRuntime:
         cfg = self.cfg
         budget_state = self.budget.state() if self.budget is not None else contracts.BudgetState()
         budget_left = max(0.0, float(cfg.budget.max_usd_per_run) - budget_state.cost_usd)
+        nav_summary = self._navigation_summary()
+        nav_extra: dict[str, Any] = {}
+        if nav_summary:
+            pose = nav_summary.get("pose") or {}
+            nav_extra["导航 Navigation"] = (
+                f"区域 {nav_summary.get('area_id', '?')} · 位置 ({pose.get('x', '?')},{pose.get('y', '?')}) "
+                f"· 置信度 {float(pose.get('confidence', 0.0) or 0.0):.2f}"
+            )
+            nav_extra["地图 Map"] = (
+                f"可走 {nav_summary.get('walkable', 0)} / 障碍 {nav_summary.get('blocked', 0)} / "
+                f"未知边界 {nav_summary.get('unknown_frontier', 0)} / 覆盖 {float(nav_summary.get('coverage_ratio', 0.0) or 0.0):.0%}"
+            )
+            nav_extra["世界 World"] = (
+                f"{nav_summary.get('areas_total', 0)} 区域 / "
+                f"{(nav_summary.get('world') or {}).get('connections', 0)} 连接"
+            )
+            last_event = str(nav_summary.get("last_event") or "")
+            if last_event:
+                nav_extra["导航事件 Nav event"] = _clip(last_event, 90)
         status = ViewerStatus(
             status=self.state.status,
             goal=self.state.goal,
@@ -1670,12 +1962,13 @@ class AgentRuntime:
             buttons=self.state.buttons_pressed,
             places=self.state.places_discovered,
             discoveries=self.state.discoveries,
-            map_cells=self.mental_map.explored_cells,
+            map_cells=int(nav_summary.get("cells_total", 0) or 0),
             calls=self.state.llm_calls or budget_state.calls,
             cost_usd=budget_state.cost_usd,
             tokens=budget_state.total_tokens,
             budget_left_usd=budget_left,
             model=str(getattr(self.brain, "model", "")),
+            extra=nav_extra,
         )
         if self.viewer is not None:
             if self._last_frame is not None:
@@ -1683,6 +1976,8 @@ class AgentRuntime:
                     self.viewer.post(self._last_frame.rgba, status)
                 except Exception:
                     pass
+            if cfg.navigation.enabled and cfg.navigation.viewer_map_panel:
+                self._post_nav_map()
         else:
             now = _now()
             status_changed = status.status != self._last_printed_status
@@ -1738,7 +2033,7 @@ class AgentRuntime:
             "last_decision": self.state.last_decision,
             "loop_warnings": self.state.loop_warnings,
             "memory": memory_stats,
-            "mental_map": self.mental_map.summary(),
+            "navigation": self._navigation_summary(),
             "budget": budget_snapshot,
         }
         try:
@@ -1900,21 +2195,59 @@ class AgentRuntime:
                     else:
                         lines.append(f"- {_clip(str(item), 260)}")
         lines.append("")
-        lines.append("## 自绘心理地图（仅来自自己的移动结果）Mental map (self-recorded)")
+        lines.append("## Navigation v2 — 永久地图与探索（纯视觉，自建）Navigation map (self-built)")
         lines.append("")
         try:
-            map_summary = self.mental_map.summary()
-            lines.append(f"- 探索格数 explored cells: {map_summary['explored_cells']}")
-            lines.append(f"- 移动步数 moves: {map_summary['moves']}；撞墙尝试 blocked attempts: {map_summary['blocked_attempts']}")
-            lines.append(f"- 区域切换 area switches: {map_summary['area_switches']}")
-            ascii_map = self.mental_map.render_map(radius=6)
-            if ascii_map:
-                lines.append("")
-                lines.append("```")
-                lines.append(ascii_map)
-                lines.append("```")
-        except Exception:
-            lines.append("- （地图不可用）")
+            nav_summary = self._navigation_summary()
+            if nav_summary:
+                pose = nav_summary.get("pose") or {}
+                lines.append(
+                    f"- 当前区域 area: `{nav_summary.get('area_id', '?')}` "
+                    f"({nav_summary.get('area_kind', '?')})"
+                )
+                lines.append(
+                    f"- 估计位置 pose: ({pose.get('x', '?')},{pose.get('y', '?')}) "
+                    f"facing={pose.get('facing')} confidence={pose.get('confidence', 0.0)}"
+                )
+                coverage = nav_summary.get("coverage") or nav_summary
+                lines.append(
+                    f"- 覆盖 coverage: walkable={coverage.get('walkable', 0)} "
+                    f"blocked={coverage.get('blocked', 0)} "
+                    f"frontier={coverage.get('unknown_frontier', 0)} "
+                    f"ratio={float(coverage.get('coverage_ratio', 0.0) or 0.0):.1%}"
+                )
+                world = nav_summary.get("world") or {}
+                lines.append(
+                    f"- 世界模型 world: {world.get('areas', 0)} 个区域, "
+                    f"{world.get('connections', 0)} 条连接"
+                )
+                area_rows = world.get("areas") or []
+                if isinstance(area_rows, list):
+                    for row in area_rows[-12:]:
+                        if isinstance(row, (list, tuple)) and len(row) >= 4:
+                            lines.append(
+                                f"  - `{row[0]}` {row[1]} visits={row[2]} walkable={row[3]}"
+                            )
+                        elif isinstance(row, dict):
+                            lines.append(
+                                f"  - `{row.get('area_id')}` {row.get('kind', '?')} "
+                                f"visits={row.get('visits', 0)} walkable={row.get('walkable', 0)}"
+                            )
+                ascii_map = ""
+                try:
+                    if self.navigation is not None:
+                        ascii_map = str(self.navigation.local_map(radius=8).get("ascii") or "")
+                except Exception:  # noqa: BLE001
+                    ascii_map = ""
+                if ascii_map:
+                    lines.append("")
+                    lines.append("```")
+                    lines.append(ascii_map)
+                    lines.append("```")
+            else:
+                lines.append("- （导航系统未启用或尚无地图）")
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f"- （导航地图不可用: {type(exc).__name__}）")
         lines.append("")
         lines.append("## 近期操作历史 Recent history")
         lines.append("")

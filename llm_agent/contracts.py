@@ -72,6 +72,35 @@ TOOL_NAMES: tuple[str, ...] = (
     "save_progress",
     "restore_checkpoint",
     "get_recent_history",
+    # Navigation v2 (high level; the navigation subsystem moves the player in
+    # Python without an LLM call per step)
+    "explore_current_area",
+    "navigate_to",
+    "get_navigation_status",
+    "get_local_map",
+    "get_world_map_summary",
+    "pause_exploration",
+    "resume_exploration",
+)
+
+#: Tools that drive the player through the navigation subsystem.
+NAVIGATION_TOOLS: tuple[str, ...] = (
+    "explore_current_area",
+    "navigate_to",
+    "get_navigation_status",
+    "get_local_map",
+    "get_world_map_summary",
+    "pause_exploration",
+    "resume_exploration",
+)
+
+#: Raw movement tools kept for compatibility (dialog/battle handling); when the
+#: navigation subsystem is enabled their movement results are still fed to the
+#: map exactly once through the executor callback.
+RAW_MOVEMENT_TOOLS: tuple[str, ...] = (
+    "press_button",
+    "execute_actions",
+    "walk",
 )
 
 

@@ -77,6 +77,7 @@ class DeepSeekBrain:
         trigger: str,
         previous_frame: Frame | None = None,
         mental_map_text: str = "",
+        nav_status_text: str = "",
     ) -> PreparedDecision:
         from llm_agent import observation
 
@@ -102,6 +103,7 @@ class DeepSeekBrain:
             last_outcome_text=last_outcome_text,
             history_limit=history_limit,
             mental_map_text=mental_map_text,
+            nav_status_text=nav_status_text,
         )
         history_chars = len(prompts.render_history(state.recent_history(history_limit), history_limit))
 

@@ -187,6 +187,42 @@ class RuntimeConfig:
 
 
 @dataclass
+class NavigationConfig:
+    """Navigation v2 (visual localization + permanent grid/world maps).
+
+    The navigation subsystem runs entirely in Python between LLM decisions: the
+    DeepSeek brain only chooses high-level goals (explore / navigate), never the
+    low-level direction keys.  All limits here are safety budgets, not game data.
+    """
+
+    #: master switch; when False the legacy raw movement tools stay the only way
+    enabled: bool = True
+    #: world-model persistence root (resolved to <run_dir>/navigation when empty)
+    world_root: str = ""
+    #: per-call exploration budgets
+    max_explore_steps: int = 500
+    max_explore_seconds: float = 600.0
+    max_explore_no_progress: int = 80
+    #: per-call navigation budgets
+    max_navigate_steps: int = 300
+    max_navigate_seconds: float = 300.0
+    #: localizer behaviour
+    localizer_max_tiles: int = 2
+    #: prompt rendering of the navigation status / local map
+    status_in_prompt: bool = True
+    prompt_map_radius: int = 8
+    prompt_map_max_chars: int = 2400
+    #: persist the world model on every checkpoint and at the end of a run
+    persist_on_checkpoint: bool = True
+    #: viewer map panel (composition happens on the runtime thread, cheap)
+    viewer_map_panel: bool = True
+    viewer_map_cell_px: int = 8
+    #: hard caps that keep a broken map from growing without bound
+    max_map_cells: int = 20000
+    max_areas: int = 200
+
+
+@dataclass
 class ViewerConfig:
     """Real-time Tk viewer settings."""
 
@@ -213,6 +249,7 @@ class AgentConfig:
     emulator: EmulatorConfig = field(default_factory=EmulatorConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     guard: GuardConfig = field(default_factory=GuardConfig)
+    navigation: NavigationConfig = field(default_factory=NavigationConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     viewer: ViewerConfig = field(default_factory=ViewerConfig)
     config_path: str = ""
@@ -264,6 +301,9 @@ class AgentConfig:
         run_dir = Path(self.runtime.run_dir)
         for sub in ("screens", "checkpoints", "audit", "errors"):
             (run_dir / sub).mkdir(parents=True, exist_ok=True)
+        if not self.navigation.world_root:
+            self.navigation.world_root = str(run_dir / "navigation")
+        Path(self.navigation.world_root).mkdir(parents=True, exist_ok=True)
         Path(self.memory.root).mkdir(parents=True, exist_ok=True)
         return run_dir
 
@@ -313,6 +353,15 @@ class AgentConfig:
         check(self.runtime.checkpoint_keep >= 1, "runtime.checkpoint_keep must be >= 1")
         check(self.runtime.max_turns >= 0, "runtime.max_turns must be >= 0")
         check(self.runtime.heartbeat_seconds >= 10, "runtime.heartbeat_seconds must be >= 10")
+
+        check(self.navigation.max_explore_steps >= 1, "navigation.max_explore_steps must be >= 1")
+        check(self.navigation.max_navigate_steps >= 1, "navigation.max_navigate_steps must be >= 1")
+        check(self.navigation.max_explore_seconds > 0, "navigation.max_explore_seconds must be > 0")
+        check(self.navigation.max_navigate_seconds > 0, "navigation.max_navigate_seconds must be > 0")
+        check(1 <= self.navigation.localizer_max_tiles <= 4, "navigation.localizer_max_tiles must be 1..4")
+        check(2 <= self.navigation.prompt_map_radius <= 24, "navigation.prompt_map_radius must be 2..24")
+        check(self.navigation.max_map_cells >= 100, "navigation.max_map_cells must be >= 100")
+        check(self.navigation.max_areas >= 1, "navigation.max_areas must be >= 1")
 
         check(1 <= self.viewer.scale <= 8, "viewer.scale must be in 1..8")
         check(self.viewer.video_fps >= 1, "viewer.video_fps must be >= 1")
@@ -377,6 +426,12 @@ _ENV_MAP: dict[str, str] = {
     "LLM_AGENT_PAUSE_FILE": "runtime.pause_file",
     "LLM_AGENT_STOP_FILE": "runtime.stop_file",
     "LLM_AGENT_VIDEO": "viewer.record_video",
+    "LLM_AGENT_NAV_ENABLED": "navigation.enabled",
+    "LLM_AGENT_NAV_WORLD_ROOT": "navigation.world_root",
+    "LLM_AGENT_NAV_MAX_EXPLORE_STEPS": "navigation.max_explore_steps",
+    "LLM_AGENT_NAV_MAX_EXPLORE_SECONDS": "navigation.max_explore_seconds",
+    "LLM_AGENT_NAV_MAX_NAVIGATE_STEPS": "navigation.max_navigate_steps",
+    "LLM_AGENT_NAV_MAP_PANEL": "navigation.viewer_map_panel",
     "LLM_AGENT_PRICE_CACHE_HIT": "api.price_input_cache_hit_per_mtok",
     "LLM_AGENT_PRICE_CACHE_MISS": "api.price_input_cache_miss_per_mtok",
     "LLM_AGENT_PRICE_OUTPUT": "api.price_output_per_mtok",
@@ -388,6 +443,10 @@ _BOOL_FIELDS = {
     "runtime.save_screens",
     "runtime.write_report",
     "api.include_previous_screenshot",
+    "navigation.enabled",
+    "navigation.status_in_prompt",
+    "navigation.persist_on_checkpoint",
+    "navigation.viewer_map_panel",
 }
 
 

@@ -39,6 +39,21 @@ DECISION_LOOP_MODULES = [
     "budget.py",
 ]
 
+#: Navigation v2 modules: same blind-exploration rules as the decision loop
+#: (they may only use screenshots + verified actions; no RAM, no PyBoy imports).
+NAVIGATION_MODULES = [
+    "types.py",
+    "vision.py",
+    "localization.py",
+    "grid_map.py",
+    "world_model.py",
+    "pathfinder.py",
+    "explorer.py",
+    "controller.py",
+    "navigation_agent.py",
+    "viz.py",
+]
+
 #: The only modules allowed to import the verification-only probe / PyBoy.
 PYBOY_ALLOWED = {"emulator.py", "progress.py"}
 
@@ -95,6 +110,12 @@ def _module_path(name: str) -> Path:
     return path
 
 
+def _nav_module_path(name: str) -> Path:
+    path = PACKAGE / "navigation" / name
+    assert path.is_file(), f"expected navigation module missing: {path}"
+    return path
+
+
 def _imported_modules(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     modules: set[str] = set()
@@ -141,6 +162,55 @@ def test_verification_probe_is_clearly_isolated() -> None:
     text = path.read_text(encoding="utf-8")
     assert "VERIFICATION-ONLY" in text
     assert "never" in text.lower() and "decision loop" in text.lower()
+
+
+# --------------------------------------------------------------------------- #
+# Navigation v2 boundaries: screenshots only, no RAM / PyBoy / guide data
+# --------------------------------------------------------------------------- #
+
+def test_navigation_modules_do_not_import_progress_or_pyboy() -> None:
+    for name in NAVIGATION_MODULES:
+        imports = _imported_modules(_nav_module_path(name))
+        forbidden = {
+            module
+            for module in imports
+            if module == "llm_agent.progress"
+            or module.startswith("llm_agent.progress.")
+            or module == "pyboy"
+            or module.startswith("pyboy.")
+        }
+        assert not forbidden, f"navigation/{name} imports hidden state: {forbidden}"
+
+
+def test_navigation_modules_have_no_ram_addresses() -> None:
+    offenders: list[str] = []
+    for name in NAVIGATION_MODULES:
+        text = _nav_module_path(name).read_text(encoding="utf-8")
+        for match in RAM_ADDRESS.finditer(text):
+            offenders.append(f"navigation/{name}: {match.group(0)}")
+    assert not offenders, f"RAM addresses leaked into navigation: {offenders}"
+
+
+#: Pure engine modules (viz.py is a UI renderer; placeholder words like
+#: "badge" there are cosmetic, not game knowledge).
+NAVIGATION_ENGINE_MODULES = [name for name in NAVIGATION_MODULES if name != "viz.py"]
+
+
+def test_navigation_modules_have_no_story_knowledge() -> None:
+    for name in NAVIGATION_ENGINE_MODULES:
+        text = _nav_module_path(name).read_text(encoding="utf-8").lower()
+        for term in ("badge", "gym", "map_id", "wobtainedbadges", "event_flags"):
+            assert term not in text, f"navigation/{name} contains game-state knowledge: {term}"
+
+
+def test_runtime_uses_navigation_high_level_tools() -> None:
+    """The runtime/tool layer must expose the navigation tools to the brain."""
+    from llm_agent.contracts import NAVIGATION_TOOLS, TOOL_NAMES
+    from llm_agent.tools import TOOL_SCHEMAS
+
+    names = {schema["function"]["name"] for schema in TOOL_SCHEMAS}
+    assert set(NAVIGATION_TOOLS).issubset(set(TOOL_NAMES))
+    assert set(NAVIGATION_TOOLS).issubset(names)
 
 
 def test_system_prompt_has_no_story_spoilers() -> None:

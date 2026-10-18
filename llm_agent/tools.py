@@ -23,6 +23,7 @@ runtime history; it never propagates an exception.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from pathlib import Path
@@ -306,6 +307,101 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             }
         ),
     ),
+    # ------------------------------------------------------------------ #
+    # Navigation v2 tools (high-level; Python does the low-level driving)
+    # ------------------------------------------------------------------ #
+    _function_schema(
+        "explore_current_area",
+        "Exploration v2: let the Python navigation system autonomously explore the current room/area with "
+        "visual localization, a permanent grid map, BFS/A* planning and automatic replanning. It runs many "
+        "verified steps WITHOUT asking the LLM each step, and stops by itself when the reachable unknown "
+        "frontier is covered or a battle/dialog/menu/transition interrupts it. Returns coverage, new cells, "
+        "discovered exits, known paths and an honest stop reason. Use this instead of pressing arrow keys "
+        "one by one when you want a room mapped.",
+        _object_schema(
+            {
+                "max_steps": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2000,
+                    "description": "Optional safety budget in verified navigation steps.",
+                },
+                "max_seconds": {
+                    "type": "number",
+                    "minimum": 1,
+                    "maximum": 3600,
+                    "description": "Optional wall-clock budget for this exploration run.",
+                },
+            }
+        ),
+    ),
+    _function_schema(
+        "navigate_to",
+        "Navigation v2: ask the Python navigation system to walk to a place it knows. It plans with BFS/A* "
+        "over the self-built map, verifies every step visually, replans on obstacles and stops at the target "
+        "or when an event blocks it. Target kinds: 'exit' (nearest known exit), 'cell' (x,y on the current "
+        "local map), 'landmark' (named landmark), 'return_to_entry' (where you entered this area) or 'area' "
+        "(area_id + optional x,y).",
+        _object_schema(
+            {
+                "kind": {
+                    "type": "string",
+                    "enum": ["exit", "cell", "landmark", "return_to_entry", "area"],
+                    "description": "What kind of target to navigate to.",
+                },
+                "x": {"type": "integer", "minimum": -999, "maximum": 999,
+                      "description": "Local map x for kind='cell'/'area'."},
+                "y": {"type": "integer", "minimum": -999, "maximum": 999,
+                      "description": "Local map y for kind='cell'/'area'."},
+                "area_id": {"type": "string", "maxLength": 80,
+                            "description": "Target area id for kind='area'."},
+                "landmark": {"type": "string", "maxLength": 80,
+                             "description": "Landmark name for kind='landmark'."},
+                "max_steps": {"type": "integer", "minimum": 1, "maximum": 2000,
+                              "description": "Optional safety budget in verified steps."},
+            },
+            required=("kind",),
+        ),
+    ),
+    _function_schema(
+        "get_navigation_status",
+        "Show the navigation status: current area id, estimated pose and confidence, coverage, number of "
+        "areas known, and the last navigation event/failure reason.",
+        _object_schema({}),
+    ),
+    _function_schema(
+        "get_local_map",
+        "Show the ASCII local grid map built from verified moves: @ you, · walked, # blocked, ? unknown, "
+        "E exit, + planned path, T target. Also returns honest coverage statistics.",
+        _object_schema(
+            {
+                "radius": {
+                    "type": "integer",
+                    "minimum": 2,
+                    "maximum": 24,
+                    "default": 8,
+                    "description": "How many tiles around the player to render.",
+                },
+            }
+        ),
+    ),
+    _function_schema(
+        "get_world_map_summary",
+        "Show the permanent world model: every area visited so far, its size/coverage/explored flag, and "
+        "the connections discovered between areas (door/edge transitions).",
+        _object_schema({}),
+    ),
+    _function_schema(
+        "pause_exploration",
+        "Pause autonomous navigation at the next safe step boundary (use it before you handle a story event "
+        "or when you want to take manual control).",
+        _object_schema({}),
+    ),
+    _function_schema(
+        "resume_exploration",
+        "Resume autonomous navigation after pause_exploration().",
+        _object_schema({}),
+    ),
 ]
 
 #: name -> schema for tests/inspection
@@ -403,6 +499,86 @@ def _clip(text: str, limit: int) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Navigation v2 helpers (formatting only; all logic lives in llm_agent.navigation)
+# --------------------------------------------------------------------------- #
+
+def _nav_report_summary(report: Any, *, kind: str) -> str:
+    """One human summary block for an ExploreReport/NavReport (duck-typed)."""
+
+    def get(name: str, default: Any = 0) -> Any:
+        value = getattr(report, name, default)
+        return default if value is None else value
+
+    status = getattr(getattr(report, "status", None), "value", "unknown")
+    lines = [
+        f"navigation {kind}: status={status} area={get('area_id', '')}",
+        f"steps={get('steps')} moves={get('moves')} blocked={get('blocked')} "
+        f"unknown={get('unknown')} elapsed={float(get('elapsed_s', 0.0)):.1f}s",
+    ]
+    reason = str(get("reason", "") or "")
+    if reason:
+        lines.append(f"reason: {_clip(reason, 220)}")
+    coverage = getattr(report, "coverage", None)
+    if coverage is not None:
+        lines.append(
+            "coverage: walkable={} blocked={} unknown_frontier={} exits={} ratio={:.0%}".format(
+                getattr(coverage, "walkable", 0),
+                getattr(coverage, "blocked", 0),
+                getattr(coverage, "unknown_frontier", 0),
+                getattr(coverage, "exits", 0),
+                float(getattr(coverage, "coverage_ratio", 0.0)),
+            )
+        )
+    pos = getattr(report, "pose", None)
+    if pos is not None:
+        lines.append(
+            f"pose: ({getattr(pos, 'x', 0)},{getattr(pos, 'y', 0)}) "
+            f"facing={getattr(pos, 'facing', None)} confidence={getattr(pos, 'confidence', 0.0):.2f}"
+        )
+    event = getattr(report, "event", None)
+    if event is not None and getattr(getattr(event, "kind", None), "value", "none") != "none":
+        lines.append(f"event: {event.to_dict()}")
+    if str(kind) == "explore":
+        lines.append(
+            f"new_cells={get('new_cells')} new_edges={get('new_edges')} new_exits={get('new_exits')}"
+        )
+    if getattr(report, "area_switched", False):
+        lines.append(f"area_switched -> {getattr(report, 'new_area_id', '')}")
+    return "\n".join(lines)
+
+
+def _nav_status_summary(status: Any) -> str:
+    """Compact navigation status text for prompts / tool results (duck-typed dict)."""
+    if not isinstance(status, Mapping):
+        return "navigation status unavailable"
+    pose = status.get("pose") or {}
+    lines = [
+        f"area={status.get('area_id', '?')} ({status.get('area_kind', '?')}) "
+        f"pose=({pose.get('x', '?')},{pose.get('y', '?')}) facing={pose.get('facing')} "
+        f"confidence={pose.get('confidence', 0.0)} valid={pose.get('valid')}",
+        "cells={} walkable={} blocked={} frontier={} coverage={:.0%} areas={}".format(
+            status.get("cells_total", 0),
+            status.get("walkable", 0),
+            status.get("blocked", 0),
+            status.get("unknown_frontier", 0),
+            float(status.get("coverage_ratio", 0.0) or 0.0),
+            status.get("areas_total", 0),
+        ),
+    ]
+    last_event = str(status.get("last_event") or "")
+    if last_event:
+        lines.append(f"last_event: {_clip(last_event, 200)}")
+    if status.get("paused"):
+        lines.append("navigation is PAUSED (call resume_exploration)")
+    world = status.get("world") or {}
+    if world:
+        lines.append(
+            f"world: {world.get('areas', 0)} area(s), {world.get('connections', 0)} connection(s)"
+        )
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
 # Executor
 # --------------------------------------------------------------------------- #
 
@@ -425,6 +601,8 @@ class ToolExecutor:
         restore_progress: Callable[[str], str],
         screen_writer: Callable[[Frame], str] | None = None,
         cfg: AgentConfig | None = None,
+        navigator: Any | None = None,
+        on_action_outcome: Callable[[ActionOutcome], None] | None = None,
     ) -> None:
         if emulator is None:
             raise ValueError("ToolExecutor requires an emulator instance")
@@ -446,6 +624,12 @@ class ToolExecutor:
         self.screen_writer = screen_writer
         self.cfg = cfg if cfg is not None else AgentConfig()
         self.max_summary_chars = int(getattr(self.cfg.api, "max_tool_result_chars", 700) or 700)
+        #: optional navigation subsystem (Navigation v2): owns low-level movement
+        self.navigator = navigator
+        #: exactly-once callback for every raw movement outcome (navigation sync)
+        self.on_action_outcome = on_action_outcome
+        #: last structured navigation report (explore/navigate) for the runtime
+        self.last_nav_report: dict[str, Any] | None = None
 
         #: last captured frame / its pixel analysis (read by runtime/guard/viewer)
         self.last_frame: Frame | None = None
@@ -625,6 +809,85 @@ class ToolExecutor:
         limit = _int_arg(arguments, "limit", minimum=1, maximum=MAX_HISTORY_ITEMS)
         return {"limit": limit if limit is not None else DEFAULT_HISTORY_LIMIT}
 
+    # -- Navigation v2 validators --------------------------------------- #
+    def _validate_explore_current_area(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        _check_keys(arguments, required=(), optional=("max_steps", "max_seconds"))
+        normalized: dict[str, Any] = {}
+        max_steps = _int_arg(arguments, "max_steps", minimum=1, maximum=2000)
+        if max_steps is not None:
+            normalized["max_steps"] = max_steps
+        if "max_seconds" in arguments:
+            value = arguments["max_seconds"]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ToolValidationError("'max_seconds' must be a number")
+            if not 1 <= float(value) <= 3600:
+                raise ToolValidationError("'max_seconds' must be in 1..3600")
+            normalized["max_seconds"] = float(value)
+        return normalized
+
+    def _validate_navigate_to(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        _check_keys(
+            arguments,
+            required=("kind",),
+            optional=("x", "y", "area_id", "landmark", "max_steps"),
+        )
+        kind = arguments["kind"]
+        if not isinstance(kind, str) or kind.strip().lower() not in (
+            "exit",
+            "cell",
+            "landmark",
+            "return_to_entry",
+            "area",
+        ):
+            raise ToolValidationError(
+                "'kind' must be one of: exit, cell, landmark, return_to_entry, area"
+            )
+        kind = kind.strip().lower()
+        normalized: dict[str, Any] = {"kind": kind}
+        x = _int_arg(arguments, "x", minimum=-999, maximum=999)
+        y = _int_arg(arguments, "y", minimum=-999, maximum=999)
+        if x is not None:
+            normalized["x"] = x
+        if y is not None:
+            normalized["y"] = y
+        area_id = _string_arg(arguments, "area_id", max_length=80)
+        if area_id:
+            normalized["area_id"] = area_id
+        landmark = _string_arg(arguments, "landmark", max_length=80)
+        if landmark:
+            normalized["landmark"] = landmark
+        max_steps = _int_arg(arguments, "max_steps", minimum=1, maximum=2000)
+        if max_steps is not None:
+            normalized["max_steps"] = max_steps
+        if kind == "cell" and (x is None or y is None):
+            raise ToolValidationError("navigate_to(kind='cell') requires integer x and y")
+        if kind == "area" and not normalized.get("area_id"):
+            raise ToolValidationError("navigate_to(kind='area') requires area_id")
+        if kind == "landmark" and not normalized.get("landmark"):
+            raise ToolValidationError("navigate_to(kind='landmark') requires landmark")
+        return normalized
+
+    def _validate_get_navigation_status(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        _check_keys(arguments, required=(), optional=())
+        return {}
+
+    def _validate_get_local_map(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        _check_keys(arguments, required=(), optional=("radius",))
+        radius = _int_arg(arguments, "radius", minimum=2, maximum=24)
+        return {"radius": radius if radius is not None else 8}
+
+    def _validate_get_world_map_summary(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        _check_keys(arguments, required=(), optional=())
+        return {}
+
+    def _validate_pause_exploration(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        _check_keys(arguments, required=(), optional=())
+        return {}
+
+    def _validate_resume_exploration(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        _check_keys(arguments, required=(), optional=())
+        return {}
+
     # ------------------------------------------------------------------ #
     # Tool handlers: observation
     # ------------------------------------------------------------------ #
@@ -719,7 +982,7 @@ class ToolExecutor:
         previous = self._previous_frame()
         baseline_event = analyze(previous, None).event if previous is not None else ScreenEvent.NONE
         outcome = self.emulator.run_batch(actions, stop_on_event=stop_on_event)
-        self.last_outcome = outcome
+        self._remember_outcome(outcome)
         if outcome.steps:
             frame = outcome.final_frame
             analysis = analyze(frame, previous)
@@ -1032,6 +1295,143 @@ class ToolExecutor:
         return self._result(call_id, "get_recent_history", summary=summary, data=data, needs_llm=False)
 
     # ------------------------------------------------------------------ #
+    # Navigation v2 handlers (high level; Python drives the player)
+    # ------------------------------------------------------------------ #
+    def _require_navigator(self, tool: str) -> Any:
+        navigator = self.navigator
+        if navigator is None:
+            raise ToolExecutionError(
+                f"{tool} is unavailable: the navigation subsystem is disabled in this run"
+            )
+        return navigator
+
+    def _nav_after_report(self, report: Any, *, kind: str, call_id: str) -> ToolResult:
+        """Common bookkeeping for an explore/navigate report."""
+        data = report.to_dict() if hasattr(report, "to_dict") else dict(report or {})
+        self.last_nav_report = data
+        steps = int(data.get("steps") or 0)
+        try:
+            if steps:
+                self.state.buttons_pressed = int(getattr(self.state, "buttons_pressed", 0)) + steps
+                self.state.action_batches = int(getattr(self.state, "action_batches", 0)) + 1
+            frames = int(data.get("frames") or 0)
+            if frames:
+                self.state.frame_index = int(getattr(self.state, "frame_index", 0)) + frames
+        except (AttributeError, TypeError, ValueError):
+            pass
+        summary = _nav_report_summary(report, kind=kind)
+        self._add_history("tool", summary)
+        try:
+            self.state.last_action = _clip(summary, 300)
+        except Exception:  # noqa: BLE001
+            pass
+        return self._result(
+            call_id,
+            f"nav_{kind}",
+            summary=summary,
+            data=data,
+            needs_llm=True,  # navigation hands control back for the next strategic decision
+        )
+
+    def _handle_explore_current_area(self, call_id: str, arguments: dict[str, Any]) -> ToolResult:
+        navigator = self._require_navigator("explore_current_area")
+        if bool(getattr(navigator, "paused", False)):
+            raise ToolExecutionError(
+                "navigation is paused; call resume_exploration() before exploring"
+            )
+        report = navigator.explore_current_area(
+            max_steps=int(arguments.get("max_steps", self.cfg.navigation.max_explore_steps)),
+            max_seconds=float(
+                arguments.get("max_seconds", self.cfg.navigation.max_explore_seconds)
+            ),
+        )
+        return self._nav_after_report(report, kind="explore", call_id=call_id)
+
+    def _handle_navigate_to(self, call_id: str, arguments: dict[str, Any]) -> ToolResult:
+        navigator = self._require_navigator("navigate_to")
+        if bool(getattr(navigator, "paused", False)):
+            raise ToolExecutionError(
+                "navigation is paused; call resume_exploration() before navigating"
+            )
+        # The tool schema is LLM-friendly (kind/x/y); the navigation subsystem
+        # consumes the frozen contract target forms.
+        kind = str(arguments.get("kind", ""))
+        if kind == "cell":
+            target: dict[str, Any] = {"cell": [int(arguments["x"]), int(arguments["y"])]}
+        elif kind == "exit":
+            target = {"exit": True}
+        elif kind == "landmark":
+            target = {"landmark": str(arguments["landmark"])}
+        elif kind == "return_to_entry":
+            target = {"return_to_entry": True}
+        elif kind == "area":
+            target = {
+                "area": str(arguments["area_id"]),
+                "cell": [int(arguments.get("x", 0)), int(arguments.get("y", 0))],
+            }
+        else:  # pragma: no cover - validation rejects unknown kinds
+            raise ToolExecutionError(f"unsupported navigate_to kind: {kind!r}")
+        report = navigator.navigate_to(
+            target,
+            max_steps=int(arguments.get("max_steps", self.cfg.navigation.max_navigate_steps)),
+        )
+        return self._nav_after_report(report, kind="navigate", call_id=call_id)
+
+    def _handle_get_navigation_status(self, call_id: str, arguments: dict[str, Any]) -> ToolResult:
+        navigator = self._require_navigator("get_navigation_status")
+        status = navigator.status()
+        data = dict(status or {})
+        summary = "Navigation status:\n" + _nav_status_summary(data)
+        self._add_history("tool", "get_navigation_status: " + _clip(summary, 200))
+        return self._result(call_id, "get_navigation_status", summary=summary, data=data,
+                            needs_llm=False)
+
+    def _handle_get_local_map(self, call_id: str, arguments: dict[str, Any]) -> ToolResult:
+        navigator = self._require_navigator("get_local_map")
+        payload = navigator.local_map(radius=int(arguments.get("radius", 8)))
+        data = dict(payload or {})
+        ascii_map = str(data.get("ascii") or "(no map yet)")
+        coverage = data.get("coverage") or {}
+        summary = (
+            f"Local map (area {data.get('area_id', '?')}, pose {data.get('pose')}):\n"
+            f"{ascii_map}\n"
+            f"cells={coverage.get('cells_total', 0)} walkable={coverage.get('walkable', 0)} "
+            f"blocked={coverage.get('blocked', 0)} frontier={coverage.get('unknown_frontier', 0)} "
+            f"coverage={float(coverage.get('coverage_ratio', 0.0) or 0.0):.0%}"
+        )
+        self._add_history("tool", "get_local_map: " + _clip(summary, 200))
+        return self._result(call_id, "get_local_map", summary=summary, data=data, needs_llm=False)
+
+    def _handle_get_world_map_summary(self, call_id: str, arguments: dict[str, Any]) -> ToolResult:
+        navigator = self._require_navigator("get_world_map_summary")
+        payload = navigator.world_summary()
+        data = dict(payload or {})
+        text = str(data.get("text") or "")
+        summary = "World map summary:\n" + (text or json.dumps(
+            {"areas": data.get("areas"), "connections": data.get("connections")},
+            ensure_ascii=False,
+        ))
+        self._add_history("tool", "get_world_map_summary: " + _clip(summary, 200))
+        return self._result(call_id, "get_world_map_summary", summary=summary, data=data,
+                            needs_llm=False)
+
+    def _handle_pause_exploration(self, call_id: str, arguments: dict[str, Any]) -> ToolResult:
+        navigator = self._require_navigator("pause_exploration")
+        navigator.pause()
+        summary = "Navigation paused: autonomous exploration/navigation will stop at the next safe boundary."
+        self._add_history("tool", summary)
+        return self._result(call_id, "pause_exploration", summary=summary, data={"paused": True},
+                            needs_llm=False)
+
+    def _handle_resume_exploration(self, call_id: str, arguments: dict[str, Any]) -> ToolResult:
+        navigator = self._require_navigator("resume_exploration")
+        navigator.resume()
+        summary = "Navigation resumed: the Python navigation subsystem may drive the player again."
+        self._add_history("tool", summary)
+        return self._result(call_id, "resume_exploration", summary=summary, data={"paused": False},
+                            needs_llm=False)
+
+    # ------------------------------------------------------------------ #
     # Result / state / audit helpers
     # ------------------------------------------------------------------ #
     def _result(
@@ -1089,6 +1489,15 @@ class ToolExecutor:
 
     def _remember_outcome(self, outcome: ActionOutcome) -> None:
         self.last_outcome = outcome
+        # Exactly-once hook: the navigation subsystem folds raw movement batches
+        # (dialog/battle/menu handling by the model) into its permanent map so the
+        # map can never silently miss a step taken through the legacy tools.
+        callback = self.on_action_outcome
+        if callback is not None:
+            try:
+                callback(outcome)
+            except Exception:  # noqa: BLE001 - navigation sync must not break a tool call
+                pass
 
     def _count_actions(self, count: int) -> None:
         """Update action counters after a batch/step completed."""

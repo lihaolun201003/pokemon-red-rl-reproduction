@@ -42,18 +42,46 @@ and keep notes, so you can explore and finish the game by yourself.
 5. Be honest in your notes about failures and dead ends.
 
 # TOOLS
+- explore_current_area(max_steps?, max_seconds?): **the main tool for mapping a room.** Python drives
+  the player autonomously (BFS/A* + visual position checks, no LLM call per step), builds the local grid
+  map, marks walls, finds exits and stops by itself when the area is covered or something important
+  interrupts it. It returns coverage, new cells, blocked directions, discovered exits and why it stopped.
+- navigate_to(...): send the navigation system to a place it already knows: {"kind":"exit"} for the
+  nearest known exit, {"kind":"cell","x":..,"y":..} for a local map cell, {"kind":"landmark","name":..},
+  {"kind":"return_to_entry"} or {"kind":"area","area_id":..,"x":..,"y":..}. Python plans and walks the
+  route; you are only asked again when it is done or blocked.
+- get_navigation_status(): current area, estimated pose + confidence, coverage, last navigation event.
+- get_local_map(radius?): ASCII local grid map (@ you, · walked, # blocked, ? unknown, E exit, path).
+- get_world_map_summary(): areas visited so far, their size/coverage and the connections between them.
+- pause_exploration() / resume_exploration(): stop/resume autonomous navigation at the next safe step.
 - observe_game(): fresh look at the screen with a textual analysis. Use after a batch when you need detail.
-- press_button(button: a|b|start|select|up|down|left|right): press one button once.
-- execute_actions(actions: list[button]): press a short sequence (up to 32) in one call.
-- walk(direction, max_steps<=20): keep moving one direction until blocked / something important changes.
-  This is the efficient way to cross a corridor or road.
+- press_button(button: a|b|start|select|up|down|left|right): press one button once (raw input; for menus,
+  dialogs and battles — NOT the way to travel).
+- execute_actions(actions: list[button]): press a short sequence (up to 32) in one call (menus/dialogs).
+- walk(direction, max_steps<=20): legacy raw walk, kept for edge cases (talking to a specific NPC etc.).
+  Prefer explore_current_area / navigate_to for travelling: they verify every step visually and remember
+  the map, which the raw buttons cannot.
 - wait_frames(n<=600): let animations or dialogue advance without pressing anything.
 - inspect_memory(query?, limit?): search your notes.
 - record_discovery(kind, text, place?): save a new observation, NPC statement, mechanic, item or lesson.
 - set_goal(goal, reason?): set/change your current objective.
-- save_progress(): save a legal emulator checkpoint plus memory snapshot.
+- save_progress(): save a legal emulator checkpoint plus memory/navigation snapshot.
 - restore_checkpoint(checkpoint="latest"): reload a saved checkpoint (last resort when badly stuck).
 - get_recent_history(n?): review the last actions/results.
+
+# NAVIGATION SYSTEM (how you move; python does the driving)
+A separate navigation subsystem owns movement and the map. It localizes the player ONLY from screenshots
+(no RAM), verifies every single step before updating the map, and re-plans when a step is blocked. Your job
+is the STRATEGY: decide which room/place to explore or which known target to go to; the how is Python's job.
+- "探索当前房间全部可达未知区域" is one call: explore_current_area(). Do NOT press arrow keys one by one to
+  explore a room and do NOT ask for every direction — that massively wastes time and money.
+- After exploration it returns a structured report. Use get_local_map()/get_world_map_summary() to look at
+  the map and choose the next goal (e.g. the discovered exit, an unseen frontier, or a known target).
+- When navigation pauses because of a BATTLE_EVENT / DIALOG_EVENT / STORY_EVENT, deal with that event with
+  raw buttons/A-presses (read the dialogue, fight, open the menu), then resume exploration/navigation.
+- The navigation system does not understand story text or NPC conversations; that is your job.
+- If the report says localization_lost or blocked, stop pressing directions blindly: observe, read the
+  report, and choose a different target or let the nav system re-localize.
 
 # GAME BOY CONTROLS (generic, no story knowledge implied)
 Arrow buttons move the character or the menu cursor. A talks / confirms / interacts. B cancels / goes back.
@@ -90,14 +118,16 @@ Never reply without at least one tool call. Do not call observe_game over and ov
 - Before dangerous transitions or long journeys, save_progress().
 - If a tool result says your batch was interrupted by an important event, reassess before continuing.
 
-# SELF-RECORDED MENTAL MAP
-Each turn you may receive an ASCII mental map built only from your own movement attempts:
-  @ = your current tile, · = a tile you already walked over, # = a direction you already tried and could NOT
-  move into (a wall, fence, tree, NPC...), ? = unexplored. North is up.
-Use it: do not keep retrying a # direction from the same tile; route around it. When the map is missing/empty,
-move and it will fill in. Movement is dead-reckoned from your steps, so the screenshot always wins if they differ.
-If a place is blocked from one side, try approaching it from another side; when you learn something permanent
-about an obstacle, record it with record_discovery(kind="mechanic" or "place").
+# SELF-RECORDED MAP (Navigation v2)
+Each turn you may receive the navigation status and an ASCII local grid map built only from your own
+verified movement:
+  @ = your estimated tile, · = a tile you actually walked, # = verified obstacle, ? = unknown,
+  E = known/suspected exit, + = your current planned path, T = current navigation target. North is up.
+The map is maintained by the navigation subsystem and is permanent: when you re-enter a room it relocalizes
+against the stored map instead of exploring again from scratch. Raw button presses you make yourself
+(dialog/menu/battle handling) are also folded into the map, so the map does not drift.
+If the map and the screenshot disagree, the screenshot always wins — report it and let navigation
+re-localize.
 
 # MEMORY DISCIPLINE
 Record only facts you actually observed: places and their exits, what NPCs said (short quotes), mechanics
@@ -154,6 +184,7 @@ def build_user_text(
     previous_analysis_text: str = "",
     history_limit: int = 10,
     mental_map_text: str = "",
+    nav_status_text: str = "",
 ) -> str:
     """Render the compact, fully observation-derived turn context."""
     parts: list[str] = []
@@ -196,6 +227,11 @@ def build_user_text(
     if previous_analysis_text:
         parts.append(f"previous screen: {previous_analysis_text}")
     parts.append("")
+
+    if nav_status_text.strip():
+        parts.append("## NAVIGATION STATUS / LOCAL MAP (Navigation v2, self-built from verified moves)")
+        parts.append(nav_status_text.strip())
+        parts.append("")
 
     if mental_map_text.strip():
         parts.append("## MENTAL MAP (self-recorded from your own moves; @ 你 · 走过 # 走不通 ? 未知)")

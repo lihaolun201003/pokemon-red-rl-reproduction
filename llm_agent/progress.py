@@ -85,6 +85,55 @@ class ProgressSnapshot:
         )
 
 
+#: Player overworld facing byte (sprite 0 ``imageIndex``; 0=down 4=up 8=left 12=right)
+ADDR_PLAYER_FACING = 0xC102
+
+FACING_NAMES: dict[int, str] = {0: "down", 4: "up", 8: "left", 12: "right"}
+
+
+@dataclass
+class OverworldProbe:
+    """Ground truth for navigation tests: map, coordinates and facing.
+
+    **TEST/VERIFICATION ONLY** — must never be imported by
+    ``llm_agent.navigation`` or any decision-loop module.  It exists so the
+    real-game localization validation (G1) can compare the pure-vision estimate
+    with the emulator's actual position without leaking RAM into navigation.
+    """
+
+    map_id: int = -1
+    x: int = -1
+    y: int = -1
+    facing: int = -1
+    frame: int = 0
+
+    @property
+    def facing_name(self) -> str | None:
+        return FACING_NAMES.get(int(self.facing))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "map_id": int(self.map_id),
+            "x": int(self.x),
+            "y": int(self.y),
+            "facing": int(self.facing),
+            "facing_name": self.facing_name,
+            "frame": int(self.frame),
+        }
+
+
+def probe_overworld(pyboy: Any) -> OverworldProbe:
+    """Read map/x/y/facing from a live PyBoy instance (verification only)."""
+    memory = pyboy.memory
+    return OverworldProbe(
+        map_id=int(memory[ADDR_MAP_ID]),
+        x=int(memory[ADDR_X]),
+        y=int(memory[ADDR_Y]),
+        facing=int(memory[ADDR_PLAYER_FACING]),
+        frame=int(getattr(pyboy, "frame_count", 0)),
+    )
+
+
 def probe_from_pyboy(pyboy: Any) -> ProgressSnapshot:
     """Read the verification snapshot from a live PyBoy instance."""
     memory = pyboy.memory

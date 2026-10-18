@@ -93,6 +93,37 @@ DeepSeek Brain → 工具调用 → PyBoy → 截图 → DeepSeek Brain
 - 唯一的 RAM 读取模块是 `llm_agent/progress.py`（**仅供运行报告/测试的独立进度核验**），`tests/llm_agent/test_import_boundaries.py` 强制禁止决策回路导入它、禁止硬编码 RAM 地址、禁止系统提示词包含剧情地名/角色。
 - 模型可能带有预训练记忆：系统提示词要求所有行动必须能被截图或已记录观察解释，记忆中的猜测只能作为待验证假设，且记录前必须先在画面中确认。
 
+### Navigation v2：纯视觉自主探索 + 永久地图记忆（2026-10-18）
+
+在原有"盲探索"之上重构出独立导航子系统 `llm_agent/navigation/`：**DeepSeek 只决定探索什么/去哪，Python 决定怎么走**（视觉定位、BFS/A*、逐步验证、失败重规划），不再为每个方向键请求 API。
+
+- **纯视觉定位**（无 RAM）：16×16 tile 网格 + 相机跟随模型 + 位移匹配评分；区分 `MOVED / BLOCKED / TURNED_ONLY / UNKNOWN / TRANSITION / INTERRUPTED`，置信度不足时**不更新坐标**；
+- **永久逻辑网格地图**：每格记录观察/走过/障碍/临时障碍/出口/交互/置信度/证据；区分"看见"与"验证可走"，撞一次 NPC 不会把格子永久当墙；诚实覆盖统计（不可达/延迟单独报告）；
+- **探索与跨房间记忆**：Frontier-Based 探索、房间出口策略、区域连接世界图、再次进入时**视觉重定位**恢复历史地图与坐标系（弱证据不合并）；
+- **DeepSeek 集成**：新增 `explore_current_area / navigate_to / get_navigation_status / get_local_map / get_world_map_summary / pause_exploration / resume_exploration` 高层工具；遇到战斗/对话/菜单/转场时暂停并返回结构化事件；
+- **可视化**：观战窗口新增实时地图面板（玩家/已走/障碍/未知/出口/路径/覆盖率），另有 `scripts/nav_v2_map_gallery.py` 输出每区域地图/世界图。
+
+真实验收结果（完整数据见 [验收报告](docs/reports/navigation_v2_validation.md)）：
+
+- **G1 定位**：真实 ROM/PyBoy 下 **122 次**方向操作，真实位移 88 次全部判对，**错误位移 0、漏检 0、UNKNOWN 0、漂移 0 格**；含转身/撞墙/多格/菜单/战斗对话截图/门口传送。
+- **G2 陌生房间**：Oak's Lab 从零自主建图 **353 格（79 可行走 / 56 障碍 / 1 出口）**，覆盖率 **97.53%**，自行判定完成；期间未知门口传送 1 次并成功走回+重定位。
+- **G3 重复进入**：离开后再次进入识别成功（重定位 score **0.9213**），**0 个重复区域**，用历史地图 14 步到达最远已知点（首次探索 268 步的 **5.2%**），0 新格/0 撞墙。
+- **G4 无人值守长跑**（纯导航无 LLM）：**426 次真实方向操作 / 259 次位移 / 4 个区域 / 1164 个新格**，规划失败 0，可验证区段漂移 0；遇真实战斗事件按设计暂停并上报。
+- **G4-API 真实 DeepSeek**：8 次 API 调用（**$0.0031**）驱动 **159 步**已验证导航（≈20 步/调用），说明"高层决策 + Python 导航"在真实 API 下工作。
+
+设计 / 验收 / 结果：[设计](docs/reports/navigation_v2_design.md) · [验收](docs/reports/navigation_v2_validation.md) · [结果](docs/reports/navigation_v2_results.md)
+
+```powershell
+# 纯视觉定位验收（真实 ROM/PyBoy）
+.\.venv\Scripts\python.exe scripts\nav_v2_g1_localization.py
+# 陌生房间自主探索 / 离开后重进入 / 多区域无人值守长跑
+.\.venv\Scripts\python.exe scripts\nav_v2_g2_explore_room.py
+.\.venv\Scripts\python.exe scripts\nav_v2_g3_reentry.py
+.\.venv\Scripts\python.exe scripts\nav_v2_g4_long_explore.py
+# 真实 DeepSeek API + Navigation v2 集成运行
+.\.venv\Scripts\python.exe scripts\run_llm_agent.py --config configs\navigation_v2_api.json --fresh --headless
+```
+
 ### 快速开始
 
 1. 配置密钥（任选其一；不会被打印、写日志或提交 git）：
@@ -137,7 +168,9 @@ DeepSeek Brain → 工具调用 → PyBoy → 截图 → DeepSeek Brain
 ### 测试
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\llm_agent -q   # 不需要 API Key、不联网
+.\.venv\Scripts\python.exe -m pytest tests\llm_agent -q     # 原 LLM Agent 套件（不需要 API Key、不联网）
+.\.venv\Scripts\python.exe -m pytest tests\navigation -q    # Navigation v2 套件（无 ROM/网络/API 依赖）
+.\.venv\Scripts\python.exe -m pytest tests\llm_agent tests\navigation -q   # 676 passed
 ```
 
 > 诚实性说明：`--scripted` 只是本地流程自测，**不得作为真实 API/游戏验收证据**；所有验收结论必须来自配置真实 `DEEPSEEK_API_KEY` 的运行目录、`audit/` 日志与独立 RAM 探针报告。

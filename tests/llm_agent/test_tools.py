@@ -308,7 +308,7 @@ def make_executor(tmp_path: Path):
 # --------------------------------------------------------------------------- #
 
 def test_tool_schemas_complete_and_ordered() -> None:
-    assert len(TOOL_SCHEMAS) == len(TOOL_NAMES) == 11
+    assert len(TOOL_SCHEMAS) == len(TOOL_NAMES) == 18
     names = [schema["function"]["name"] for schema in TOOL_SCHEMAS]
     assert names == list(TOOL_NAMES)
     assert set(TOOL_SCHEMAS_BY_NAME) == set(TOOL_NAMES)

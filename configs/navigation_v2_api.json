@@ -1,0 +1,47 @@
+{
+  "api": {
+    "model": "deepseek-flash",
+    "thinking": "disabled",
+    "max_tokens": 900,
+    "image_scale": 4,
+    "image_format": "png"
+  },
+  "budget": {
+    "max_usd_per_run": 0.6,
+    "max_usd_total": 10.0,
+    "max_calls_per_run": 60,
+    "max_calls_per_hour": 240
+  },
+  "emulator": {
+    "press_frames": 8,
+    "action_frames": 24,
+    "window": "null",
+    "presentation_fps": 60
+  },
+  "navigation": {
+    "enabled": true,
+    "max_explore_steps": 400,
+    "max_explore_seconds": 180.0,
+    "max_explore_no_progress": 80,
+    "max_navigate_steps": 300,
+    "status_in_prompt": true,
+    "prompt_map_radius": 8,
+    "prompt_map_max_chars": 2400,
+    "persist_on_checkpoint": true,
+    "viewer_map_panel": true
+  },
+  "runtime": {
+    "checkpoint_every_actions": 5,
+    "save_screens": true,
+    "screenshot_every_batches": 1,
+    "max_turns": 8
+  },
+  "memory": {
+    "max_context_chars": 6000
+  },
+  "viewer": {
+    "enabled": false,
+    "scale": 4,
+    "refresh_ms": 16
+  }
+}

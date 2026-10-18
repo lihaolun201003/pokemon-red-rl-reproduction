@@ -100,6 +100,7 @@ class AgentViewer:
         self.stop_event = threading.Event()
         self._frame_queue: queue.Queue = queue.Queue(maxsize=_QUEUE_SIZE)
         self._status_queue: queue.Queue = queue.Queue(maxsize=_QUEUE_SIZE)
+        self._map_queue: queue.Queue = queue.Queue(maxsize=2)
         self._lock = threading.Lock()
         self._playback_frames: list[np.ndarray] = []
         self._playback_index = 0
@@ -116,6 +117,8 @@ class AgentViewer:
         # Tk objects (main thread only)
         self._root: Any = None
         self._image_label: Any = None
+        self._map_label: Any = None
+        self._map_photo: Any = None
         self._photo: Any = None
         self._status_vars: dict[str, Any] = {}
         self._pause_button: Any = None
@@ -159,6 +162,29 @@ class AgentViewer:
             pass
         try:
             self._frame_queue.put_nowait(frame)
+        except queue.Full:
+            pass
+
+    def post_map(self, rgba: np.ndarray) -> None:
+        """Publish the navigation local-map image (rendered by ``navigation.viz``).
+
+        Kept separate from the game-frame queue so a slow map render can never
+        delay the live game presentation.
+        """
+        if rgba is None:
+            return
+        image = np.asarray(rgba)
+        if image.ndim == 2:
+            image = np.repeat(image[..., None], 3, axis=2)
+        if image.dtype != np.uint8:
+            image = np.clip(image, 0, 255).astype(np.uint8)
+        try:
+            while True:
+                self._map_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            self._map_queue.put_nowait(np.ascontiguousarray(image))
         except queue.Full:
             pass
 
@@ -221,6 +247,21 @@ class AgentViewer:
 
         self._image_label = tk.Label(outer, bg="#000000", bd=2, relief=tk.SUNKEN)
         self._image_label.grid(row=0, column=0, sticky="nw")
+
+        # Navigation v2 live map panel (below the game screen, same column).
+        self._map_label = tk.Label(
+            outer,
+            bg="#0b0f13",
+            bd=2,
+            relief=tk.SUNKEN,
+            text="导航地图 Navigation map\n（探索中实时更新）",
+            fg="#58636d",
+            font=("Segoe UI", 8),
+            width=42,
+            height=8,
+            compound=tk.CENTER,
+        )
+        self._map_label.grid(row=1, column=0, sticky="nw", pady=(6, 0))
 
         panel = tk.Frame(outer, bg="#101418", padx=10, pady=4)
         panel.grid(row=0, column=1, sticky="nsew")
@@ -382,6 +423,14 @@ class AgentViewer:
         if status is not None:
             self._last_status = status
             self._render_status(status)
+        map_image = None
+        try:
+            while True:
+                map_image = self._map_queue.get_nowait()
+        except queue.Empty:
+            pass
+        if map_image is not None:
+            self._render_map(map_image)
         self._animate_waiting()
         self._sync_pause_button()
         if self._shutdown.is_set():
@@ -430,6 +479,23 @@ class AgentViewer:
                 )
             self._photo = self._pil_imagetk.PhotoImage(image)
             self._image_label.configure(image=self._photo)
+        except Exception:
+            pass
+
+    def _render_map(self, rgba: np.ndarray) -> None:
+        """Render the navigation map panel (nearest-neighbour, aspect preserved)."""
+        if self._map_label is None:
+            return
+        try:
+            image = self._pil_image.fromarray(np.asarray(rgba)[..., :3], mode="RGB")
+            target_w = max(160, int(160 * max(1, int(self.cfg.scale))))
+            # Fit inside a fixed panel height so the window layout stays stable.
+            ratio = min(1.0, target_w / max(1, image.width))
+            width = max(1, int(image.width * ratio))
+            height = max(1, int(image.height * ratio))
+            image = image.resize((width, height), self._pil_image.NEAREST)
+            self._map_photo = self._pil_imagetk.PhotoImage(image)
+            self._map_label.configure(image=self._map_photo, text="")
         except Exception:
             pass
 

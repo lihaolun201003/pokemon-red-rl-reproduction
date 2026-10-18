@@ -198,12 +198,13 @@ def test_scripted_dry_run_end_to_end(tmp_path: Path, rom_path: Path, state_path:
     assert metrics["status"] in ("finished", "paused_budget", "stopped")
     assert metrics["buttons"] > 0
     assert not (tmp_path / "agent.lock").exists()  # lock released
-    # the self-recorded mental map must be persisted and summarised
-    assert (run_dir / "mental_map.json").is_file()
-    map_snapshot = json.loads((run_dir / "mental_map.json").read_text(encoding="utf-8"))
-    assert map_snapshot["version"] == 1
-    assert "mental_map" in metrics
-    assert metrics["mental_map"]["explored_cells"] >= 1
+    # the navigation v2 subsystem must persist its permanent world model
+    nav_root = run_dir / "navigation"
+    assert (nav_root / "world.json").is_file()
+    world_snapshot = json.loads((nav_root / "world.json").read_text(encoding="utf-8"))
+    assert world_snapshot.get("version")
+    assert "navigation" in metrics
+    assert metrics["navigation"]["areas_total"] >= 1
 
 
 @pytest.mark.real_rom
