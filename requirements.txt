@@ -1,21 +1,9 @@
-einops
-gymnasium==0.29.0
-minigrid==2.3.1
-memory-gym
-docopt
-jinja2
-matplotlib
-opencv-python
-optuna
-pygame
-pyglet
-reprint
-ruamel.yaml
-scipy
-tensorboard
-tblib
-tqdm
-scikit-image
+# Runtime dependencies of the vision-based LLM agent.
+#
+# No PyTorch / CUDA / PPO / Gym / TensorBoard: the earlier reinforcement-learning
+# reproduction is archived on the `archive/ppo-reproduction` branch.
+#
+# Tested on Windows 11 + Python 3.10.11.
 pyboy==2.4.0
-mediapy
-psutil
+numpy>=1.24,<3
+Pillow>=10

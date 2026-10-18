@@ -59,8 +59,9 @@ GitHub：https://github.com/lihaolun201003/pokemon-red-rl-reproduction
   `nav_v2_g3_reentry.py`、`nav_v2_g4_long_explore.py`、`nav_v2_map_gallery.py`；
 - `configs/navigation_v2_api.json`（真实 API 集成的可复现配置）。
 
-未改动：`neroRL/`、`reproduction/`、`scripts/train.py`、`configs/train_*.yaml`、
-checkpoint、PPO 评估脚本等训练系统；ROM/存档/API Key/录像/权重均未提交。
+未改动：当时仓库中的 PPO 训练系统（`neroRL/`、`reproduction/`、`scripts/train.py`、
+`configs/train_*.yaml`、checkpoint、PPO 评估脚本等）；该系统已在后续仓库清理中移出
+`main`，完整保留在 `archive/ppo-reproduction` 分支。ROM/存档/API Key/录像/权重均未提交。
 
 ## 3. 原问题的修复（对应任务书第三节）
 

@@ -1,13 +1,18 @@
 cff-version: 1.2.0
-message: "If you use this repository, please cite the original paper and the upstream neroRL implementation."
-title: "Pokemon Red RL - independent reproduction and training supervision experiment (seed_0, 1M real environment steps)"
+message: "If you use this repository in academic work, please cite it, and also cite PyBoy and the DeepSeek API you rely on."
+title: "Pokemon Red Autonomous Agent - Vision-Based Autonomous Exploration and Multi-Agent Decision-Making"
 abstract: >-
-  Independent reproduction of the Pokemon Red reinforcement-learning pipeline
-  (PyBoy emulator + PPO, based on neroRL's poke_red branch and the paper
-  "Pokemon Red via Reinforcement Learning"), plus a supervised long-training
-  experiment reaching 1,000,000 real environment steps and a fixed-protocol
-  independent evaluation. No game ROM, save state, model weights or gameplay
-  video is distributed with this repository.
+  A research codebase for studying vision-based autonomous agents on a real
+  Game Boy game. A vision large language model (DeepSeek) observes only the
+  emulator screen, its own action history and its own notes, and controls the
+  game through constrained button presses. The repository implements pure-vision
+  localization and permanent grid/world maps (Navigation v2), a Game Director
+  with single-owner control arbitration, and independent Story and Pokemon
+  agents for dialogue and battle takeover, together with task scheduling,
+  shared memory, progress monitoring, checkpoint rollback and API budgeting.
+  No game ROM, save state, model weights, gameplay video or API key is
+  distributed. The previous PPO training reproduction is archived on the
+  `archive/ppo-reproduction` branch.
 authors:
   - name: "lihaolun201003"
     alias: "lihaolun201003"
@@ -15,6 +20,13 @@ authors:
 repository-code: "https://github.com/lihaolun201003/pokemon-red-rl-reproduction"
 license: MIT
 references:
+  - type: software
+    title: "PyBoy: A Python Game Boy emulator"
+    authors:
+      - family-names: "Ynddal"
+        given-names: "Mads"
+    url: "https://github.com/Baekalfen/PyBoy"
+    license: MIT
   - type: article
     title: "Pokemon Red via Reinforcement Learning"
     authors:
@@ -22,15 +34,9 @@ references:
         given-names: "Marco"
     url: "https://arxiv.org/abs/2502.19920"
   - type: software
-    title: "neroRL (poke_red branch)"
-    authors:
-      - family-names: "Pleines"
-        given-names: "Marco"
-    url: "https://github.com/MarcoMeter/neroRL/tree/poke_red"
-    version: "1d5c2db1f47f29d501ec9eacdc9c7f6480ea6217"
-  - type: software
-    title: "PokemonRedExperiments"
+    title: "PokemonRedExperiments (related work, archived PPO reproduction)"
     authors:
       - family-names: "Whidden"
         given-names: "Peter"
     url: "https://github.com/PWhiddy/PokemonRedExperiments"
+    license: MIT
