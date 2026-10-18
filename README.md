@@ -124,6 +124,28 @@
   规划失败 0。
 * G4-API（真实 DeepSeek）：8 次 API 调用（**$0.0031**）驱动 **159 步**已验证导航（约 20 步/调用）。
 
+**智能体自己构建的地图（真实运行，非手绘）**
+
+下图是 G2 验收中智能体从零开始探索 Oak's Lab 后，由其持久化的 world model
+（`navigation/world.json` + `areas/*.json`）直接渲染出的地图：**353 个逻辑格、79 个确认可行走、
+56 个障碍、1 个出口，覆盖率 97.53%**。颜色含义：绿=确认可行走，红=障碍/墙，橙=临时障碍/待验证，
+黄=出口/可交互，灰=已看见但未确认，白=玩家位置，紫=规划路径，浅蓝=目标；底部标注该区域的
+统计与覆盖率。
+
+![Oak's Lab 自主建图（真实运行）](docs/reports/figures/navigation_v2_oaks_lab_map.png)
+
+多区域世界图（G4 无人值守长跑、无 LLM，4 个区域 / 2 条区域连接，每个节点记录该区域的
+可通行格数与探索状态）——这是 Navigation v2 跨房间记忆的持久化结构：
+
+![Navigation v2 多区域世界图](docs/reports/figures/navigation_v2_world_graph.png)
+
+两张图都可用仓库里的脚本从保存的 world model 重新生成（原始 world model 与完整证据在本地
+`artifacts/`，gitignored；图本身由代码渲染，不是手工绘制）：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\nav_v2_map_gallery.py --world-dir artifacts\nav_v2\g2\navigation --out artifacts\nav_v2\map_gallery
+```
+
 **Multi-Agent v1（真实 ROM；G2/G3/G7 使用真实 DeepSeek）**
 
 * G0 回归：**1,248 项测试全部通过**，Navigation v2 真实验收脚本全部通过。
